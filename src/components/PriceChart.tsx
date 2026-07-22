@@ -83,7 +83,32 @@ function CustomTooltip({
 }
 
 export default function PriceChart({ condition, timeRange, data }: PriceChartProps) {
-  if (!data || data.length === 0) {
+  // Filter data based on selected time range
+  let chartData = data;
+  if (timeRange !== "All" && data && data.length > 0) {
+    const daysMap: Record<string, number> = {
+      "7d": 7,
+      "30d": 30,
+      "90d": 90,
+      "1y": 365,
+    };
+    const days = daysMap[timeRange] || 90;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+
+    const rangeData = data.filter((d) => {
+      if ((d as any).rawDate) {
+        return new Date((d as any).rawDate) >= cutoff;
+      }
+      return true;
+    });
+
+    if (rangeData.length > 0) {
+      chartData = rangeData;
+    }
+  }
+
+  if (!chartData || chartData.length === 0) {
     return (
       <div
         style={{
@@ -106,7 +131,7 @@ export default function PriceChart({ condition, timeRange, data }: PriceChartPro
   }
 
   // Calculate price range for Y-axis
-  const prices = data.map((d) => d.price);
+  const prices = chartData.map((d) => d.price);
   const minPrice = Math.min(...prices);
   const maxPrice = Math.max(...prices);
   const padding = (maxPrice - minPrice) * 0.1;
@@ -132,13 +157,13 @@ export default function PriceChart({ condition, timeRange, data }: PriceChartPro
           {getConditionLabel(condition)}
         </span>
         <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-          {data.length} data points
+          {chartData.length} data points
         </span>
       </div>
 
       <ResponsiveContainer width="100%" height={320}>
         <AreaChart
-          data={data}
+          data={chartData}
           margin={{ top: 5, right: 10, left: 10, bottom: 5 }}
         >
           <defs>

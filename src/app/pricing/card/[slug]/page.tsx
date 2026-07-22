@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, asc } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import * as schema from "@/db/schema";
 import CardDetailClient from "./CardDetailClient";
@@ -108,55 +108,66 @@ export default async function CardDetailPage({
     isOutlier: s.isOutlier
   }));
 
-  // Fetch price history
-  const historyData = await db
-    .select()
-    .from(schema.priceSnapshots)
-    .where(eq(schema.priceSnapshots.cardId, card.id))
-    .orderBy(schema.priceSnapshots.snapshotDate);
+  // Fetch all historical sales for rich price history timeline
+  const allSalesForHistory = await db
+    .select({
+      salePrice: schema.sales.salePrice,
+      saleDate: schema.sales.saleDate,
+      condition: schema.sales.condition,
+      isOutlier: schema.sales.isOutlier,
+    })
+    .from(schema.sales)
+    .where(eq(schema.sales.cardId, card.id))
+    .orderBy(asc(schema.sales.saleDate));
 
-  let formattedHistory = historyData.map(h => {
-    const dateObj = new Date(h.snapshotDate);
-    return {
-      date: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      fullDate: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-      price: h.marketPrice || 0,
-      sales: h.saleCount,
-      condition: h.condition
-    };
-  });
+  // Build price history timeline grouped by date & condition
+  const dateMap: Record<string, Record<string, { totalCents: number; count: number }>> = {};
 
-  // If price_snapshots has limited history, build price trend points directly from historical sales
-  if (formattedHistory.length < 5 && salesData.length > 0) {
-    const dateMap: Record<string, Record<string, { totalCents: number; count: number }>> = {};
+  for (const s of allSalesForHistory) {
+    if (s.isOutlier) continue;
+    const dateStr = s.saleDate.toISOString().split("T")[0];
+    if (!dateMap[dateStr]) dateMap[dateStr] = {};
+    if (!dateMap[dateStr][s.condition]) dateMap[dateStr][s.condition] = { totalCents: 0, count: 0 };
+    dateMap[dateStr][s.condition].totalCents += s.salePrice;
+    dateMap[dateStr][s.condition].count += 1;
+  }
 
-    for (const s of salesData) {
-      if (s.isOutlier) continue;
-      const dateStr = s.saleDate.toISOString().split("T")[0];
-      if (!dateMap[dateStr]) dateMap[dateStr] = {};
-      if (!dateMap[dateStr][s.condition]) dateMap[dateStr][s.condition] = { totalCents: 0, count: 0 };
-      dateMap[dateStr][s.condition].totalCents += s.salePrice;
-      dateMap[dateStr][s.condition].count += 1;
+  const salesHistoryPoints: any[] = [];
+  for (const dateStr of Object.keys(dateMap).sort()) {
+    for (const cond of Object.keys(dateMap[dateStr])) {
+      const avgPrice = Math.round(dateMap[dateStr][cond].totalCents / dateMap[dateStr][cond].count);
+      const dateObj = new Date(dateStr);
+      salesHistoryPoints.push({
+        date: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        fullDate: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+        price: avgPrice,
+        sales: dateMap[dateStr][cond].count,
+        condition: cond,
+        rawDate: dateStr,
+      });
     }
+  }
 
-    const salesHistoryPoints: any[] = [];
-    for (const dateStr of Object.keys(dateMap).sort()) {
-      for (const cond of Object.keys(dateMap[dateStr])) {
-        const avgPrice = Math.round(dateMap[dateStr][cond].totalCents / dateMap[dateStr][cond].count);
-        const dateObj = new Date(dateStr);
-        salesHistoryPoints.push({
-          date: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-          fullDate: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-          price: avgPrice,
-          sales: dateMap[dateStr][cond].count,
-          condition: cond,
-        });
-      }
-    }
+  let formattedHistory = salesHistoryPoints;
 
-    if (salesHistoryPoints.length > formattedHistory.length) {
-      formattedHistory = salesHistoryPoints;
-    }
+  if (formattedHistory.length === 0) {
+    const historyData = await db
+      .select()
+      .from(schema.priceSnapshots)
+      .where(eq(schema.priceSnapshots.cardId, card.id))
+      .orderBy(asc(schema.priceSnapshots.snapshotDate));
+
+    formattedHistory = historyData.map(h => {
+      const dateObj = new Date(h.snapshotDate);
+      return {
+        date: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        fullDate: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+        price: h.marketPrice || 0,
+        sales: h.saleCount,
+        condition: h.condition,
+        rawDate: h.snapshotDate,
+      };
+    });
   }
 
   // Serialize card data for client component
