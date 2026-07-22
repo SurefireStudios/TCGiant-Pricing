@@ -5,14 +5,20 @@ import * as schema from '../db/schema';
 import { parseGrade } from './grade-parser';
 
 export function getPriceChartingConsole(setName: string): string {
+  const isJapanese = setName.toLowerCase().includes('(japanese)');
   let cleanName = setName
     .toLowerCase()
+    .replace('(japanese)', '')
     .trim()
     .replace(/&/g, 'and')
     .replace(/[^a-z0-9\s-]/g, '')
     .replace(/\s+/g, '-');
 
-  if (cleanName === 'base' || cleanName === 'base-set') return 'pokemon-base-set';
+  if (cleanName === 'base' || cleanName === 'base-set') cleanName = 'base-set';
+
+  if (isJapanese) {
+    return `pokemon-japanese-${cleanName}`;
+  }
   return `pokemon-${cleanName}`;
 }
 
@@ -23,6 +29,7 @@ export function getPriceChartingGameName(
 ): string {
   let cleanName = cardName
     .toLowerCase()
+    .replace('(japanese)', '')
     .trim()
     .replace(/&/g, 'and')
     .replace(/[^a-z0-9\s-]/g, '')
@@ -33,7 +40,9 @@ export function getPriceChartingGameName(
   if (variant === 'shadowless') pcVariant = '-shadowless';
   if (variant === 'reverse_holo') pcVariant = '-reverse-foil';
 
-  const numPart = cardNumber ? `-${cardNumber.replace(/[^a-z0-9-]/gi, '')}` : '';
+  const cleanNum = cardNumber ? parseInt(cardNumber.replace(/[^0-9]/g, ''), 10) : NaN;
+  const numPart = !isNaN(cleanNum) ? `-${cleanNum}` : cardNumber ? `-${cardNumber.replace(/[^a-z0-9-]/gi, '')}` : '';
+
   return `${cleanName}${pcVariant}${numPart}`;
 }
 

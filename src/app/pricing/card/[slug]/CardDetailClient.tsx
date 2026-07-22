@@ -165,6 +165,11 @@ export default function CardDetailClient({ card }: { card: CardData }) {
                 marginBottom: "var(--space-xs)",
               }}
             >
+              {(card.name.includes('(Japanese)') || card.setName.includes('(Japanese)')) && (
+                <span className="badge" style={{ background: "linear-gradient(135deg, #e11d48 0%, #be123c 100%)", color: "#ffffff", fontWeight: 700, border: "none" }}>
+                  JPN
+                </span>
+              )}
               <span className="badge badge-ungraded">{card.rarity}</span>
               {card.variant && card.variant !== 'unlimited' && (
                 <span className="badge badge-ungraded" style={{ textTransform: "capitalize", background: "var(--bg-elevated)", color: "var(--text-secondary)", border: "1px solid var(--border-subtle)" }}>
