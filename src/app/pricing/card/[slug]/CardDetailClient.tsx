@@ -76,6 +76,15 @@ export default function CardDetailClient({ card }: { card: CardData }) {
   const currentPrice = card.prices[selectedCondition];
   const hasPrices = Object.values(card.prices).some((p) => p !== null && p !== undefined);
 
+  const handleVolumeClick = (e: React.MouseEvent, condition: CardCondition) => {
+    e.stopPropagation();
+    setSelectedCondition(condition);
+    const element = document.getElementById("recent-sales-section");
+    if (element) {
+      element.scrollIntoView({ behavior: "smooth" });
+    }
+  };
+
   return (
     <div
       className="container"
@@ -115,49 +124,58 @@ export default function CardDetailClient({ card }: { card: CardData }) {
         <span style={{ color: "var(--text-primary)" }}>{card.name}</span>
       </nav>
 
-      {/* Card Header */}
+      {/* Main Header Card */}
       <div
+        className="glass-card"
         style={{
+          padding: "var(--space-xl)",
+          marginBottom: "var(--space-2xl)",
           display: "grid",
           gridTemplateColumns: "240px 1fr",
-          gap: "var(--space-xl)",
-          marginBottom: "var(--space-2xl)",
+          gap: "var(--space-2xl)",
+          alignItems: "start",
         }}
       >
         {/* Card Image */}
         <div
-          className="glass-card"
           style={{
-            padding: "var(--space-md)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            aspectRatio: "2.5/3.5",
-            background:
-              "linear-gradient(135deg, var(--bg-glass), var(--bg-elevated))",
+            position: "relative",
+            aspectRatio: "0.714",
+            borderRadius: "var(--radius-lg)",
+            overflow: "hidden",
+            background: "var(--bg-tertiary)",
+            border: "1px solid var(--border-subtle)",
           }}
         >
           {card.imageUrl ? (
             <FallbackImage
               src={card.imageUrl}
-              alt={`${card.name} - ${card.setName}`}
+              alt={card.name}
               style={{
                 width: "100%",
                 height: "100%",
-                maxWidth: "100%",
-                maxHeight: "100%",
-                borderRadius: "var(--radius-md)",
-                objectFit: "contain",
+                objectFit: "cover",
               }}
             />
           ) : (
-            <div style={{ fontSize: "3rem", opacity: 0.3 }}>🃏</div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--text-muted)",
+              }}
+            >
+              No Image
+            </div>
           )}
         </div>
 
-        {/* Card Info */}
+        {/* Card Metadata & Market Price */}
         <div>
-          <div style={{ marginBottom: "var(--space-lg)" }}>
+          {/* Header Info */}
+          <div style={{ marginBottom: "var(--space-xl)" }}>
             <div
               style={{
                 display: "flex",
@@ -166,136 +184,130 @@ export default function CardDetailClient({ card }: { card: CardData }) {
                 marginBottom: "var(--space-xs)",
               }}
             >
-              {(card.name.includes('(Japanese)') || card.setName.includes('(Japanese)')) && (
-                <span className="badge" style={{ background: "linear-gradient(135deg, #e11d48 0%, #be123c 100%)", color: "#ffffff", fontWeight: 700, border: "none" }}>
-                  JPN
-                </span>
-              )}
               <span className="badge badge-ungraded">{card.rarity}</span>
               {card.variant && card.variant !== 'unlimited' && (
-                <span className="badge badge-ungraded" style={{ textTransform: "capitalize", background: "var(--bg-elevated)", color: "var(--text-secondary)", border: "1px solid var(--border-subtle)" }}>
+                <span className="badge badge-ungraded" style={{ textTransform: "capitalize" }}>
                   {card.variant.replace("_", " ")}
-                </span>
-              )}
-              {card.cardNumber && (
-                <span className="text-xs text-muted">
-                  #{card.cardNumber}
                 </span>
               )}
             </div>
             <h1 style={{ fontSize: "2rem", marginBottom: "var(--space-xs)" }}>
               {card.name}
             </h1>
-            <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>
+            <p className="text-sm text-secondary">
               {card.setName} · {card.supertype}
               {card.hp ? ` · HP ${card.hp}` : ""}
-              {card.artist !== "Unknown" ? ` · Artist: ${card.artist}` : ""}
+              {card.artist ? ` · Artist: ${card.artist}` : ""}
             </p>
           </div>
 
-          {/* Price Display */}
+          {/* Market Price Banner */}
           <div
             className="glass-card"
             style={{
               padding: "var(--space-lg)",
-              marginBottom: "var(--space-lg)",
-              background: hasPrices
-                ? "linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(99, 102, 241, 0.03))"
-                : "var(--bg-elevated)",
-              border: hasPrices
-                ? "1px solid var(--border-primary)"
-                : "1px solid var(--border-subtle)",
+              background: "rgba(99, 102, 241, 0.05)",
+              border: "1px solid rgba(99, 102, 241, 0.15)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                flexWrap: "wrap",
-                gap: "var(--space-md)",
-              }}
-            >
-              <div>
-                <div
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "var(--text-muted)",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.05em",
-                    fontWeight: 600,
-                    marginBottom: "var(--space-xs)",
-                  }}
-                >
-                  Market Price ·{" "}
-                  <span
-                    className={`badge ${getConditionBadgeClass(selectedCondition)}`}
-                  >
-                    {getConditionLabel(selectedCondition)}
-                  </span>
-                </div>
-                <div className="price price-large">
-                  {typeof currentPrice === "number" ? formatPrice(currentPrice) : "Awaiting data"}
-                </div>
-              </div>
-
-              {/* Controls: Condition */}
+            <div>
               <div
                 style={{
-                  display: "flex",
-                  gap: "var(--space-md)",
-                  flexWrap: "wrap",
+                  fontSize: "0.75rem",
+                  color: "var(--text-muted)",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  fontWeight: 600,
+                  marginBottom: "var(--space-2xs)",
                 }}
               >
-                {/* Condition Selector */}
-                <div style={{ flex: "1 1 200px" }}>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: "0.85rem",
-                      color: "var(--text-muted)",
-                      marginBottom: "var(--space-xs)",
-                    }}
-                  >
-                    Grade / Condition
-                  </label>
-                  <select
-                    className="input-field"
-                    value={selectedCondition}
-                    onChange={(e) =>
-                      setSelectedCondition(e.target.value as CardCondition)
-                    }
-                    style={{ width: "100%", cursor: "pointer" }}
-                  >
-                    {ALL_CONDITIONS.map((cond) => {
-                      const price = card.prices[cond];
-                      return (
-                        <option key={cond} value={cond}>
-                          {getConditionLabel(cond)}
-                          {price !== undefined && price !== null
-                            ? ` — ${formatPrice(price)}`
-                            : ""}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
+                Market Price ·{" "}
+                <span style={{ color: "var(--color-primary-light)" }}>
+                  {getConditionLabel(selectedCondition)}
+                </span>
               </div>
-              
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: 4 }}>
-                  Total Sales
-                </div>
-                <div className="font-mono" style={{ fontSize: "1.25rem", fontWeight: 700 }}>
-                  {card.saleCount.toLocaleString()}
-                </div>
+              <div
+                className="price font-mono"
+                style={{
+                  fontSize: "2.5rem",
+                  fontWeight: 700,
+                  color: "var(--text-primary)",
+                }}
+              >
+                {currentPrice !== null ? formatPrice(currentPrice) : "N/A"}
+              </div>
+            </div>
+
+            {/* Condition Selector */}
+            <div style={{ textAlign: "right" }}>
+              <label
+                htmlFor="condition-select"
+                style={{
+                  fontSize: "0.75rem",
+                  color: "var(--text-muted)",
+                  display: "block",
+                  marginBottom: "var(--space-2xs)",
+                }}
+              >
+                Grade / Condition
+              </label>
+              <select
+                id="condition-select"
+                className="btn btn-ghost"
+                value={selectedCondition}
+                onChange={(e) =>
+                  setSelectedCondition(e.target.value as CardCondition)
+                }
+                style={{
+                  background: "var(--bg-elevated)",
+                  border: "1px solid var(--border-subtle)",
+                  color: "var(--text-primary)",
+                  padding: "var(--space-xs) var(--space-md)",
+                  borderRadius: "var(--radius-md)",
+                  cursor: "pointer",
+                }}
+              >
+                {ALL_CONDITIONS.map((cond) => (
+                  <option key={cond} value={cond}>
+                    {getConditionLabel(cond)}
+                    {card.prices[cond]
+                      ? ` — ${formatPrice(card.prices[cond]!)}`
+                      : " (No Data)"}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Total Sales Counter */}
+            <div style={{ textAlign: "right" }}>
+              <div
+                style={{
+                  fontSize: "0.75rem",
+                  color: "var(--text-muted)",
+                  marginBottom: "var(--space-2xs)",
+                }}
+              >
+                Total Sales
+              </div>
+              <div
+                className="font-mono"
+                style={{
+                  fontSize: "1.5rem",
+                  fontWeight: 700,
+                  color: "var(--text-primary)",
+                }}
+              >
+                {card.saleCount}
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* All Prices Grid */}
+      {/* Price Grid across all conditions */}
       <section className="section">
         <div className="section-header">
           <h2 className="section-title">All Prices</h2>
@@ -328,7 +340,19 @@ export default function CardDetailClient({ card }: { card: CardData }) {
                 </div>
                 {card.volumes && card.volumes[condition] && (
                   <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: 4, whiteSpace: "nowrap" }}>
-                    volume: <span style={{ color: "var(--color-primary-light)", fontWeight: 500 }}>{card.volumes[condition]}</span>
+                    volume:{" "}
+                    <span
+                      onClick={(e) => handleVolumeClick(e, condition)}
+                      style={{
+                        color: "var(--color-primary-light)",
+                        fontWeight: 500,
+                        textDecoration: "underline",
+                        cursor: "pointer",
+                      }}
+                      title="Jump to Recent Sales"
+                    >
+                      {card.volumes[condition]}
+                    </span>
                   </div>
                 )}
               </button>
@@ -359,7 +383,7 @@ export default function CardDetailClient({ card }: { card: CardData }) {
       </section>
 
       {/* Recent Sales */}
-      <section className="section">
+      <section id="recent-sales-section" className="section">
         <div className="section-header">
           <h2 className="section-title">Recent Sales</h2>
         </div>
