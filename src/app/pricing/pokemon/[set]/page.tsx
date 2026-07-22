@@ -6,6 +6,8 @@ import { notFound } from "next/navigation";
 import * as schema from "@/db/schema";
 import FallbackImage from "@/components/FallbackImage";
 
+export const revalidate = 3600; // Cache for 1 hour at edge
+
 // Dynamic metadata based on set
 export async function generateMetadata({
   params,

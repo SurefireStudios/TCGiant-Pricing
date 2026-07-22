@@ -388,6 +388,7 @@ export default function CardDetailClient({ card }: { card: CardData }) {
           <h2 className="section-title">Recent Sales</h2>
         </div>
         <SalesTable
+          cardId={card.id}
           sales={card.sales}
           selectedCondition={selectedCondition}
           onConditionChange={setSelectedCondition}

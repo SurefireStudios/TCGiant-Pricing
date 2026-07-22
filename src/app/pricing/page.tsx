@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import SearchAutocomplete from "@/components/SearchAutocomplete";
 
+export const revalidate = 3600; // Cache for 1 hour at edge
+
 export const metadata: Metadata = {
   title: "Trading Card Prices — Free Ungraded & PSA Price Guide",
   description:

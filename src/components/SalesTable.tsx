@@ -18,6 +18,7 @@ export interface Sale {
 }
 
 interface SalesTableProps {
+  cardId?: number;
   sales: Sale[];
   selectedCondition: CardCondition;
   onConditionChange: (condition: CardCondition) => void;
@@ -39,19 +40,23 @@ function getCompanyBadgeClass(company: string): string {
 }
 
 export default function SalesTable({
+  cardId,
   sales,
   selectedCondition,
   onConditionChange,
 }: SalesTableProps) {
   const [filterCondition, setFilterCondition] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [loadedSales, setLoadedSales] = useState<Sale[]>(sales || []);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [apiPage, setApiPage] = useState<number>(1); // 1 is handled by server init essentially, but we start fetching at 2
+
   const itemsPerPage = 15;
 
-  const safeSales = sales || [];
   const filteredSales =
     filterCondition === "all"
-      ? safeSales
-      : safeSales.filter((s) => s.condition === filterCondition);
+      ? loadedSales
+      : loadedSales.filter((s) => s.condition === filterCondition);
 
   const totalPages = Math.max(1, Math.ceil(filteredSales.length / itemsPerPage));
   const startIndex = (currentPage - 1) * itemsPerPage;
@@ -60,6 +65,43 @@ export default function SalesTable({
   const handleFilterChange = (newCond: string) => {
     setFilterCondition(newCond);
     setCurrentPage(1);
+  };
+
+  const handleLoadMore = async () => {
+    if (!cardId) return;
+    setIsLoadingMore(true);
+    try {
+      const nextPage = apiPage + 1;
+      const res = await fetch(`/api/v1/sales?card_id=${cardId}&page=${nextPage}&limit=100`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.sales && data.sales.length > 0) {
+          // Map to match Sale interface
+          const newSales: Sale[] = data.sales.map((s: any) => ({
+            id: s.id,
+            salePrice: s.sale_price,
+            saleDate: s.sale_date.split("T")[0],
+            condition: s.condition,
+            gradingCompany: s.grading_company,
+            gradeValue: s.grade_value,
+            ebayTitle: s.ebay_title,
+            ebayUrl: s.ebay_url,
+            isOutlier: s.is_outlier,
+          }));
+          
+          // Deduplicate by ID
+          const existingIds = new Set(loadedSales.map(s => s.id));
+          const uniqueNewSales = newSales.filter(s => !existingIds.has(s.id));
+          
+          setLoadedSales([...loadedSales, ...uniqueNewSales]);
+          setApiPage(nextPage);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load more sales", err);
+    } finally {
+      setIsLoadingMore(false);
+    }
   };
 
   return (
@@ -169,7 +211,7 @@ export default function SalesTable({
                       No sales data yet
                     </div>
                     <div style={{ fontSize: "0.8rem" }}>
-                      {safeSales.length === 0
+                      {loadedSales.length === 0
                         ? "Sales data will appear once the eBay scraper begins collecting sold listings."
                         : "No sales found for this filter. Try selecting a different condition."}
                     </div>
@@ -290,6 +332,20 @@ export default function SalesTable({
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Load More Button */}
+      {cardId && (
+        <div style={{ display: "flex", justifyContent: "center", marginTop: "var(--space-lg)" }}>
+          <button
+            className="btn btn-secondary"
+            onClick={handleLoadMore}
+            disabled={isLoadingMore}
+            style={{ minWidth: 200 }}
+          >
+            {isLoadingMore ? "Loading..." : "Load Older Sales"}
+          </button>
         </div>
       )}
     </div>

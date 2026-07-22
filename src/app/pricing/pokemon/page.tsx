@@ -5,6 +5,8 @@ import { eq, asc, desc } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import SearchAutocomplete from "@/components/SearchAutocomplete";
 
+export const revalidate = 3600; // Cache for 1 hour at edge
+
 export const metadata: Metadata = {
   title: "Pokémon Card Prices — All Sets | TCGiant",
   description:

@@ -6,6 +6,8 @@ import { notFound } from "next/navigation";
 import * as schema from "@/db/schema";
 import CardDetailClient from "./CardDetailClient";
 
+export const revalidate = 3600; // Cache for 1 hour at edge
+
 export async function generateMetadata({
   params,
 }: {

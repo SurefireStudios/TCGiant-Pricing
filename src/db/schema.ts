@@ -10,6 +10,7 @@
  * - api_keys: API authentication keys with tier-based rate limits
  */
 
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   text,
@@ -151,6 +152,7 @@ export const cards = pgTable(
     index('cards_external_id_idx').on(table.externalId),
     index('cards_variant_idx').on(table.variant),
     index('cards_name_idx').on(table.name),
+    index('cards_name_trgm_idx').using('gin', sql`name gin_trgm_ops`),
     index('cards_last_scraped_idx').on(table.lastScrapedAt),
   ]
 );
