@@ -22,8 +22,9 @@ interface CardData {
   supertype: string;
   hp: string | null;
   artist: string;
+  variant?: string;
   imageUrl: string;
-  prices: Record<string, Record<string, number | null>>;
+  prices: Record<string, number | null>;
   saleCount: number;
   lastUpdated: string;
   sales: Sale[];
@@ -228,7 +229,7 @@ export default function CardDetailClient({ card }: { card: CardData }) {
                   </span>
                 </div>
                 <div className="price price-large">
-                  {currentPrice ? formatPrice(currentPrice) : "Awaiting data"}
+                  {typeof currentPrice === "number" ? formatPrice(currentPrice) : "Awaiting data"}
                 </div>
               </div>
 
