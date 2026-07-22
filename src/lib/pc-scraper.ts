@@ -57,6 +57,17 @@ export async function scrapePriceChartingCard(
     setName: string;
   }
 ): Promise<PCScrapeResult> {
+  // PriceCharting requires English names; skip Japanese character cards cleanly
+  if (/[^\x00-\x7F]/.test(card.name) || /[^\x00-\x7F]/.test(card.setName)) {
+    return {
+      success: false,
+      url: '',
+      salesInserted: 0,
+      pricesUpdated: 0,
+      error: 'Skipped: Japanese character name (PriceCharting requires English slug)',
+    };
+  }
+
   const consoleSlug = getPriceChartingConsole(card.setName);
   const gameSlug = getPriceChartingGameName(card.name, card.variant, card.cardNumber);
   const url = `https://www.pricecharting.com/game/${consoleSlug}/${gameSlug}`;

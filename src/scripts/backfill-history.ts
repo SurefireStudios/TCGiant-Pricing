@@ -95,11 +95,17 @@ async function runBackfill() {
         }
       } else {
         totalFailed++;
-        console.log(`   ❌ Failed: ${res.error || 'Page not found / Error'}`);
+        const isSkipped = res.error?.startsWith('Skipped:');
+        if (isSkipped) {
+          console.log(`   ⚠️ ${res.error}`);
+        } else {
+          console.log(`   ❌ Failed: ${res.error || 'Page not found / Error'}`);
+        }
       }
 
-      // Rate limit backoff delay (1.2 seconds)
-      await delay(1200);
+      // Rate limit backoff delay (1.2s for scraped cards, 50ms for skipped cards)
+      const isSkipped = res.error?.startsWith('Skipped:');
+      await delay(isSkipped ? 50 : 1200);
     }
   }
 
