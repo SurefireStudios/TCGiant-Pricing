@@ -241,8 +241,19 @@ export async function searchSoldPokemonCards(
   // Wrap in quotes for exact match, exclude bulk lots
   const parts: string[] = [];
 
+  // Handle Japanese cards (don't force exact match on the parentheses)
+  let parsedCardName = cardName;
+  let isJapanese = false;
+  if (parsedCardName.includes('(Japanese)')) {
+    parsedCardName = parsedCardName.replace('(Japanese)', '').trim();
+    isJapanese = true;
+  }
+
   // Card name in quotes for exact match
-  parts.push(`"${cardName}"`);
+  parts.push(`"${parsedCardName}"`);
+  if (isJapanese) {
+    parts.push('Japanese');
+  }
 
   // Set name (shortened for better results — eBay truncates titles)
   if (setName) {
@@ -358,7 +369,18 @@ export async function searchActivePokemonCards(
   options: { limit?: number; sellerUsername?: string; extraKeywords?: string } = {}
 ): Promise<EbaySoldItem[]> {
   const parts: string[] = [];
-  parts.push(`"${cardName}"`);
+  
+  let parsedCardName = cardName;
+  let isJapanese = false;
+  if (parsedCardName.includes('(Japanese)')) {
+    parsedCardName = parsedCardName.replace('(Japanese)', '').trim();
+    isJapanese = true;
+  }
+
+  parts.push(`"${parsedCardName}"`);
+  if (isJapanese) {
+    parts.push('Japanese');
+  }
 
   if (setName) {
     const shortSet = setName
