@@ -25,6 +25,7 @@ interface CardData {
   variant?: string;
   imageUrl: string;
   prices: Record<string, number | null>;
+  volumes?: Record<string, string | null>;
   saleCount: number;
   lastUpdated: string;
   sales: Sale[];
@@ -325,6 +326,11 @@ export default function CardDetailClient({ card }: { card: CardData }) {
                 <div className={`price-grid-value ${!price ? "no-data" : ""}`}>
                   {price ? formatPrice(price) : "—"}
                 </div>
+                {card.volumes && card.volumes[condition] && (
+                  <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: 4, whiteSpace: "nowrap" }}>
+                    volume: <span style={{ color: "var(--color-primary-light)", fontWeight: 500 }}>{card.volumes[condition]}</span>
+                  </div>
+                )}
               </button>
             );
           })}

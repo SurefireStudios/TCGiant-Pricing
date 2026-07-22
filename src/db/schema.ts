@@ -243,6 +243,7 @@ export const currentPrices = pgTable(
     marketPrice: integer('market_price'), // cents
     medianPrice: integer('median_price'),
     saleCount: integer('sale_count').notNull().default(0),
+    volumeText: varchar('volume_text', { length: 100 }),
     lastSaleDate: timestamp('last_sale_date'),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },

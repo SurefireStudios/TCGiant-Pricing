@@ -84,8 +84,10 @@ export default async function CardDetailPage({
     .where(eq(schema.currentPrices.cardId, card.id));
 
   const priceMap: Record<string, number | null> = {};
+  const volumeMap: Record<string, string | null> = {};
   for (const p of prices) {
     priceMap[p.condition] = p.marketPrice;
+    volumeMap[p.condition] = p.volumeText;
   }
 
   // Fetch recent sales
@@ -186,6 +188,7 @@ export default async function CardDetailPage({
     artist: card.artist || "Unknown",
     imageUrl: card.imageLargeUrl || card.imageUrl || "",
     prices: priceMap,
+    volumes: volumeMap,
     saleCount: formattedSales.length,
     lastUpdated: new Date().toISOString().split("T")[0],
     sales: formattedSales,

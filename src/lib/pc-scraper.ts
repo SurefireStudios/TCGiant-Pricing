@@ -107,6 +107,7 @@ export async function scrapePriceChartingCard(
 
     if (priceTableMatch) {
       const tableHtml = priceTableMatch[1];
+
       const headerMatches = [...tableHtml.matchAll(/<th[^>]*>(.*?)<\/th>/gi)].map((m) =>
         m[1].replace(/<[^>]+>/g, '').trim()
       );
@@ -115,18 +116,32 @@ export async function scrapePriceChartingCard(
         (m) => parseFloat(m[1].replace(/,/g, ''))
       );
 
+      const volumeMatches = [...tableHtml.matchAll(/<td[^>]*class="js-show-tab[^"]*"[^>]*>[\s\S]*?<a[^>]*>(.*?)<\/a>/gi)].map(
+        (m) => m[1].replace(/<[^>]+>/g, '').trim()
+      );
+
       const conditionMap: Record<string, string> = {
         'Ungraded': 'UNGRADED',
+        'Grade 1': 'GRADE_1',
+        'Grade 2': 'GRADE_2',
+        'Grade 3': 'GRADE_3',
+        'Grade 4': 'GRADE_4',
+        'Grade 5': 'GRADE_5',
+        'Grade 6': 'GRADE_6',
         'Grade 7': 'GRADE_7',
         'Grade 8': 'GRADE_8',
         'Grade 9': 'GRADE_9',
         'Grade 9.5': 'GRADE_9_5',
         'PSA 10': 'PSA_10',
+        'CGC 10': 'CGC_10',
+        'BGS 10': 'BGS_10',
+        'TAG 10': 'TAG_10',
       };
 
       for (let i = 0; i < headerMatches.length && i < priceMatches.length; i++) {
         const header = headerMatches[i];
         const priceVal = priceMatches[i];
+        const volText = volumeMatches[i] || null;
 
         const mappedCond = conditionMap[header];
         if (mappedCond && !isNaN(priceVal) && priceVal > 0) {
@@ -148,6 +163,7 @@ export async function scrapePriceChartingCard(
               .update(schema.currentPrices)
               .set({
                 marketPrice: priceCents,
+                volumeText: volText,
                 updatedAt: new Date(),
               })
               .where(eq(schema.currentPrices.id, existing[0].id));
@@ -157,6 +173,7 @@ export async function scrapePriceChartingCard(
               condition: mappedCond as any,
               gradingCompany: mappedCond === 'PSA_10' ? 'PSA' : 'UNGRADED',
               marketPrice: priceCents,
+              volumeText: volText,
               saleCount: 0,
               updatedAt: new Date(),
             });

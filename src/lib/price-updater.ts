@@ -136,13 +136,30 @@ export async function updatePricesForCards(
         stats.pricesComputed++;
 
         // Upsert current_prices
+        // Check if existing marketPrice exists in currentPrices (to preserve PriceCharting baseline)
+        const existingCp = await db
+          .select()
+          .from(schema.currentPrices)
+          .where(
+            and(
+              eq(schema.currentPrices.cardId, cardId),
+              eq(schema.currentPrices.condition, condition as any),
+              eq(schema.currentPrices.gradingCompany, gradingCompany as any)
+            )
+          );
+
+        const targetMarketPrice =
+          existingCp.length > 0 && existingCp[0].marketPrice
+            ? existingCp[0].marketPrice
+            : priceResult.marketPrice;
+
         await db
           .insert(schema.currentPrices)
           .values({
             cardId,
-            condition,
-            gradingCompany,
-            marketPrice: priceResult.marketPrice,
+            condition: condition as any,
+            gradingCompany: gradingCompany as any,
+            marketPrice: targetMarketPrice,
             medianPrice: priceResult.medianPrice,
             saleCount: priceResult.saleCount,
             lastSaleDate: new Date(salesRows[0].saleDate),
@@ -155,7 +172,7 @@ export async function updatePricesForCards(
               schema.currentPrices.gradingCompany,
             ],
             set: {
-              marketPrice: priceResult.marketPrice,
+              marketPrice: targetMarketPrice,
               medianPrice: priceResult.medianPrice,
               saleCount: priceResult.saleCount,
               lastSaleDate: new Date(salesRows[0].saleDate),
