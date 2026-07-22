@@ -44,12 +44,23 @@ export default function SalesTable({
   onConditionChange,
 }: SalesTableProps) {
   const [filterCondition, setFilterCondition] = useState<string>("all");
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const itemsPerPage = 15;
 
   const safeSales = sales || [];
   const filteredSales =
     filterCondition === "all"
       ? safeSales
       : safeSales.filter((s) => s.condition === filterCondition);
+
+  const totalPages = Math.max(1, Math.ceil(filteredSales.length / itemsPerPage));
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const paginatedSales = filteredSales.slice(startIndex, startIndex + itemsPerPage);
+
+  const handleFilterChange = (newCond: string) => {
+    setFilterCondition(newCond);
+    setCurrentPage(1);
+  };
 
   return (
     <div>
@@ -76,37 +87,37 @@ export default function SalesTable({
         <div className="filter-tabs">
           <button
             className={`filter-tab ${filterCondition === "all" ? "active" : ""}`}
-            onClick={() => setFilterCondition("all")}
+            onClick={() => handleFilterChange("all")}
           >
             All
           </button>
           <button
             className={`filter-tab ${filterCondition === "UNGRADED" ? "active" : ""}`}
-            onClick={() => setFilterCondition("UNGRADED")}
+            onClick={() => handleFilterChange("UNGRADED")}
           >
             Ungraded
           </button>
           <button
             className={`filter-tab ${filterCondition === "PSA_10" ? "active" : ""}`}
-            onClick={() => setFilterCondition("PSA_10")}
+            onClick={() => handleFilterChange("PSA_10")}
           >
             PSA 10
           </button>
           <button
             className={`filter-tab ${filterCondition === "CGC_10" ? "active" : ""}`}
-            onClick={() => setFilterCondition("CGC_10")}
+            onClick={() => handleFilterChange("CGC_10")}
           >
             CGC 10
           </button>
           <button
             className={`filter-tab ${filterCondition === "BGS_10" ? "active" : ""}`}
-            onClick={() => setFilterCondition("BGS_10")}
+            onClick={() => handleFilterChange("BGS_10")}
           >
             BGS 10
           </button>
           <button
             className={`filter-tab ${filterCondition === "TAG_10" ? "active" : ""}`}
-            onClick={() => setFilterCondition("TAG_10")}
+            onClick={() => handleFilterChange("TAG_10")}
           >
             TAG 10
           </button>
@@ -114,7 +125,7 @@ export default function SalesTable({
             <button
               key={cond}
               className={`filter-tab ${filterCondition === cond ? "active" : ""}`}
-              onClick={() => setFilterCondition(cond)}
+              onClick={() => handleFilterChange(cond)}
             >
               {getConditionLabel(cond as CardCondition)}
             </button>
@@ -165,7 +176,7 @@ export default function SalesTable({
                   </td>
                 </tr>
               )}
-              {filteredSales.map((sale) => (
+              {paginatedSales.map((sale) => (
                 <tr
                   key={sale.id}
                   style={
@@ -239,18 +250,46 @@ export default function SalesTable({
         </div>
       </div>
 
-      {safeSales.length > 0 && (
+      {/* Pagination Controls */}
+      {filteredSales.length > 0 && (
         <div
           style={{
             display: "flex",
-            justifyContent: "center",
+            alignItems: "center",
+            justifyContent: "space-between",
             marginTop: "var(--space-md)",
+            padding: "0 var(--space-xs)",
+            flexWrap: "wrap",
+            gap: "var(--space-sm)",
           }}
         >
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-            Showing {filteredSales.length} of {safeSales.length} sales ·
-            Outliers are included but visually marked
+            Showing {startIndex + 1}–{Math.min(startIndex + itemsPerPage, filteredSales.length)} of {filteredSales.length} sales
           </span>
+
+          {totalPages > 1 && (
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-xs)" }}>
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                style={{ fontSize: "0.75rem", opacity: currentPage === 1 ? 0.4 : 1 }}
+              >
+                ← Previous
+              </button>
+              <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)", fontWeight: 600, padding: "0 8px" }}>
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                style={{ fontSize: "0.75rem", opacity: currentPage === totalPages ? 0.4 : 1 }}
+              >
+                Next →
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
