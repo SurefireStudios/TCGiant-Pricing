@@ -115,7 +115,7 @@ export default async function CardDetailPage({
     .where(eq(schema.priceSnapshots.cardId, card.id))
     .orderBy(schema.priceSnapshots.snapshotDate);
 
-  const formattedHistory = historyData.map(h => {
+  let formattedHistory = historyData.map(h => {
     const dateObj = new Date(h.snapshotDate);
     return {
       date: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
@@ -125,6 +125,39 @@ export default async function CardDetailPage({
       condition: h.condition
     };
   });
+
+  // If price_snapshots has limited history, build price trend points directly from historical sales
+  if (formattedHistory.length < 5 && salesData.length > 0) {
+    const dateMap: Record<string, Record<string, { totalCents: number; count: number }>> = {};
+
+    for (const s of salesData) {
+      if (s.isOutlier) continue;
+      const dateStr = s.saleDate.toISOString().split("T")[0];
+      if (!dateMap[dateStr]) dateMap[dateStr] = {};
+      if (!dateMap[dateStr][s.condition]) dateMap[dateStr][s.condition] = { totalCents: 0, count: 0 };
+      dateMap[dateStr][s.condition].totalCents += s.salePrice;
+      dateMap[dateStr][s.condition].count += 1;
+    }
+
+    const salesHistoryPoints: any[] = [];
+    for (const dateStr of Object.keys(dateMap).sort()) {
+      for (const cond of Object.keys(dateMap[dateStr])) {
+        const avgPrice = Math.round(dateMap[dateStr][cond].totalCents / dateMap[dateStr][cond].count);
+        const dateObj = new Date(dateStr);
+        salesHistoryPoints.push({
+          date: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+          fullDate: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+          price: avgPrice,
+          sales: dateMap[dateStr][cond].count,
+          condition: cond,
+        });
+      }
+    }
+
+    if (salesHistoryPoints.length > formattedHistory.length) {
+      formattedHistory = salesHistoryPoints;
+    }
+  }
 
   // Serialize card data for client component
   const cardData = {

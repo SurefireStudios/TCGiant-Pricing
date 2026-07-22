@@ -163,33 +163,21 @@ export async function updatePricesForCards(
             },
           });
 
-        // Insert daily snapshot (upsert to avoid duplicates)
-        await db
-          .insert(schema.priceSnapshots)
-          .values({
-            cardId,
-            condition,
-            gradingCompany,
-            marketPrice: priceResult.marketPrice,
-            medianPrice: priceResult.medianPrice,
-            averagePrice: priceResult.averagePrice,
-            ewmaPrice: priceResult.ewmaPrice,
-            minPrice: priceResult.minPrice,
-            maxPrice: priceResult.maxPrice,
-            saleCount: priceResult.saleCount,
-            outlierCount: priceResult.outlierCount,
-            period: 'daily' as const,
-            snapshotDate: today,
-          })
-          .onConflictDoUpdate({
-            target: [
-              schema.priceSnapshots.cardId,
-              schema.priceSnapshots.condition,
-              schema.priceSnapshots.gradingCompany,
-              schema.priceSnapshots.snapshotDate,
-              schema.priceSnapshots.period,
-            ],
-            set: {
+        // Insert snapshots for distinct historical sale dates
+        const datesToSnapshot = new Set<string>();
+        datesToSnapshot.add(today);
+        for (const s of salesRows) {
+          const dStr = new Date(s.saleDate).toISOString().split('T')[0];
+          datesToSnapshot.add(dStr);
+        }
+
+        for (const snapDate of datesToSnapshot) {
+          await db
+            .insert(schema.priceSnapshots)
+            .values({
+              cardId,
+              condition,
+              gradingCompany,
               marketPrice: priceResult.marketPrice,
               medianPrice: priceResult.medianPrice,
               averagePrice: priceResult.averagePrice,
@@ -198,10 +186,30 @@ export async function updatePricesForCards(
               maxPrice: priceResult.maxPrice,
               saleCount: priceResult.saleCount,
               outlierCount: priceResult.outlierCount,
-            },
-          });
-
-        stats.snapshotsCreated++;
+              period: 'daily' as const,
+              snapshotDate: snapDate,
+            })
+            .onConflictDoUpdate({
+              target: [
+                schema.priceSnapshots.cardId,
+                schema.priceSnapshots.condition,
+                schema.priceSnapshots.gradingCompany,
+                schema.priceSnapshots.snapshotDate,
+                schema.priceSnapshots.period,
+              ],
+              set: {
+                marketPrice: priceResult.marketPrice,
+                medianPrice: priceResult.medianPrice,
+                averagePrice: priceResult.averagePrice,
+                ewmaPrice: priceResult.ewmaPrice,
+                minPrice: priceResult.minPrice,
+                maxPrice: priceResult.maxPrice,
+                saleCount: priceResult.saleCount,
+                outlierCount: priceResult.outlierCount,
+              },
+            });
+          stats.snapshotsCreated++;
+        }
         stats.combosUpdated++;
       } catch (err: any) {
         console.error(
