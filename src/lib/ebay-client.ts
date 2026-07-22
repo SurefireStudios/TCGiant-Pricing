@@ -276,6 +276,117 @@ export async function searchSoldPokemonCards(
 }
 
 /**
+ * Search eBay for active (live) listings.
+ */
+export async function searchActiveListings(
+  query: string,
+  options: {
+    categoryId?: string;
+    limit?: number;
+    sellerUsername?: string;
+  } = {}
+): Promise<EbaySoldItem[]> {
+  const { categoryId = '183454', limit = 10 } = options;
+  const env = (process.env.EBAY_ENVIRONMENT || 'PRODUCTION') as keyof typeof ENDPOINTS;
+  const baseUrl = ENDPOINTS[env].browse;
+  const token = await getAccessToken();
+
+  const filters: string[] = [
+    'buyingOptions:{FIXED_PRICE}', // Only Buy It Now
+    'priceCurrency:USD',
+    'conditionIds:{1000|1500|2000|2500|3000|4000|5000|6000|7000}',
+  ];
+
+  if (options.sellerUsername) {
+    filters.push(`sellers:{${options.sellerUsername}}`);
+  }
+
+  const params = new URLSearchParams({
+    q: query,
+    category_ids: categoryId,
+    filter: filters.join(','),
+    limit: limit.toString(),
+  });
+
+  const url = `${baseUrl}/item_summary/search?${params.toString()}`;
+
+  const response = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+      'X-EBAY-C-ENDUSERCTX': 'contextualLocation=country=US',
+    },
+  });
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const data: EbaySearchResponse = await response.json();
+  const allItems: EbaySoldItem[] = [];
+
+  if (!data.itemSummaries) return [];
+
+  for (const item of data.itemSummaries) {
+    if (!item.price || !item.price.value) continue;
+    const priceValue = parseFloat(item.price.value);
+    
+    allItems.push({
+      itemId: item.itemId,
+      title: item.title,
+      price: Math.round(priceValue * 100),
+      currency: item.price.currency || 'USD',
+      soldDate: item.itemEndDate || new Date().toISOString(),
+      itemUrl: item.itemWebUrl,
+      imageUrl: item.image?.imageUrl,
+      condition: item.condition,
+      seller: item.seller?.username,
+    });
+  }
+
+  return allItems;
+}
+
+/**
+ * Search specifically for live Pokémon cards (Active Listings).
+ */
+export async function searchActivePokemonCards(
+  cardName: string,
+  setName: string,
+  cardNumber?: string | null,
+  options: { limit?: number; sellerUsername?: string; extraKeywords?: string } = {}
+): Promise<EbaySoldItem[]> {
+  const parts: string[] = [];
+  parts.push(`"${cardName}"`);
+
+  if (setName) {
+    const shortSet = setName
+      .replace(/Pokémon /gi, '')
+      .replace(/Pokemon /gi, '')
+      .replace(/Black Star Promos/gi, 'Promos');
+    parts.push(`"${shortSet}"`);
+  }
+
+  if (cardNumber) {
+    parts.push(cardNumber);
+  }
+
+  if (options.extraKeywords) {
+    parts.push(options.extraKeywords);
+  }
+
+  const exclusions = '-lot -bundle -repack -mystery -random -break -"pick your"';
+  const query = `${parts.join(' ')} ${exclusions}`;
+
+  return searchActiveListings(query, {
+    categoryId: '183454',
+    limit: options.limit || 10,
+    sellerUsername: options.sellerUsername,
+  });
+}
+
+/**
  * Test the eBay connection by fetching a single result.
  * Useful for verifying credentials are working.
  */

@@ -24,6 +24,11 @@ export const metadata: Metadata = {
     siteName: "TCGiant Pricing",
     type: "website",
   },
+  manifest: "/manifest.json",
+};
+
+export const viewport = {
+  themeColor: "#0f172a",
 };
 
 export default function RootLayout({

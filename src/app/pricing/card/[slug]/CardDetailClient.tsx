@@ -8,6 +8,7 @@ import PriceChart from "@/components/PriceChart";
 import type { PriceDataPoint } from "@/components/PriceChart";
 import SalesTable from "@/components/SalesTable";
 import type { Sale } from "@/components/SalesTable";
+import ActiveListingsCarousel from "@/components/ActiveListingsCarousel";
 import FallbackImage from "@/components/FallbackImage";
 
 interface CardData {
@@ -387,6 +388,11 @@ export default function CardDetailClient({ card }: { card: CardData }) {
         <div className="section-header">
           <h2 className="section-title">Recent Sales</h2>
         </div>
+        
+        {/* Active eBay Listings */}
+        <ActiveListingsCarousel cardId={card.id} storeUsername="cardboardshop" />
+
+        {/* Sales Table */}
         <SalesTable
           cardId={card.id}
           sales={card.sales}
