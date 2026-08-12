@@ -1,114 +1,82 @@
 /**
  * API Route: GET /api/v1/card
  *
- * Get a single card with all price data across all conditions.
- *
- * Parameters:
- * - id: Card ID (integer)
- * - slug: Card slug (string)
- * - q: Search query (returns first match)
+ * A single product with every finish's current price.
+ * Accepts ?id= (TCGplayer productId) or ?slug=.
  */
 
 import { NextRequest } from 'next/server';
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
-import { eq, ilike } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { validateApiKey, apiError, apiSuccess } from '@/lib/api-auth';
 import * as schema from '@/db/schema';
 
 export async function GET(request: NextRequest) {
-  const authResult = await validateApiKey(request);
-  if (!authResult.valid) {
-    return apiError(authResult.error, authResult.status);
-  }
+  const auth = await validateApiKey(request);
+  if (!auth.valid) return apiError(auth.error, auth.status, auth.retryAfter);
 
-  const url = new URL(request.url);
-  const id = url.searchParams.get('id');
-  const slug = url.searchParams.get('slug');
-  const q = url.searchParams.get('q');
-
-  if (!id && !slug && !q) {
-    return apiError('One of id, slug, or q parameter is required.');
-  }
+  const params = request.nextUrl.searchParams;
+  const id = params.get('id');
+  const slug = params.get('slug');
+  if (!id && !slug) return apiError('Provide id or slug');
 
   try {
-    const sqlClient = neon(process.env.DATABASE_URL!);
-    const db = drizzle(sqlClient, { schema });
+    const db = drizzle(neon(process.env.DATABASE_URL!), { schema });
 
-    // Build where clause based on provided param
-    let whereClause;
-    if (id) {
-      whereClause = eq(schema.cards.id, parseInt(id));
-    } else if (slug) {
-      whereClause = eq(schema.cards.slug, slug);
-    } else if (q) {
-      whereClause = ilike(schema.cards.name, `%${q}%`);
-    }
-
-    const results = await db
+    const [product] = await db
       .select({
-        id: schema.cards.id,
-        name: schema.cards.name,
-        slug: schema.cards.slug,
-        cardNumber: schema.cards.cardNumber,
-        rarity: schema.cards.rarity,
-        supertype: schema.cards.supertype,
-        subtypes: schema.cards.subtypes,
-        hp: schema.cards.hp,
-        imageUrl: schema.cards.imageUrl,
-        imageLargeUrl: schema.cards.imageLargeUrl,
-        artist: schema.cards.artist,
-        setName: schema.sets.name,
-        setSlug: schema.sets.slug,
-        gameName: schema.games.name,
-        gameSlug: schema.games.slug,
+        id: schema.tcgProducts.id,
+        name: schema.tcgProducts.name,
+        slug: schema.tcgProducts.slug,
+        number: schema.tcgProducts.number,
+        rarity: schema.tcgProducts.rarity,
+        imageUrl: schema.tcgProducts.imageUrl,
+        setName: schema.tcgGroups.name,
+        setSlug: schema.tcgGroups.slug,
+        gameName: schema.tcgCategories.name,
+        gameSlug: schema.tcgCategories.slug,
       })
-      .from(schema.cards)
-      .innerJoin(schema.sets, eq(schema.cards.setId, schema.sets.id))
-      .innerJoin(schema.games, eq(schema.sets.gameId, schema.games.id))
-      .where(whereClause)
+      .from(schema.tcgProducts)
+      .innerJoin(schema.tcgGroups, eq(schema.tcgGroups.id, schema.tcgProducts.groupId))
+      .innerJoin(schema.tcgCategories, eq(schema.tcgCategories.id, schema.tcgProducts.categoryId))
+      .where(id ? eq(schema.tcgProducts.id, parseInt(id, 10)) : eq(schema.tcgProducts.slug, slug!))
       .limit(1);
 
-    if (results.length === 0) {
-      return apiError('Card not found', 404);
-    }
+    if (!product) return apiError('Product not found', 404);
 
-    const card = results[0];
-
-    // Fetch current prices for this card
     const prices = await db
       .select()
-      .from(schema.currentPrices)
-      .where(eq(schema.currentPrices.cardId, card.id));
-
-    // Build prices object
-    const priceMap: Record<string, number | null> = {};
-    for (const p of prices) {
-      const key = p.condition.toLowerCase();
-      priceMap[key] = p.marketPrice;
-    }
+      .from(schema.tcgLatestPrices)
+      .where(eq(schema.tcgLatestPrices.productId, product.id))
+      .orderBy(asc(schema.tcgLatestPrices.subType));
 
     return apiSuccess({
-      id: card.id.toString(),
-      name: card.name,
-      slug: card.slug,
-      card_number: card.cardNumber,
-      rarity: card.rarity,
-      supertype: card.supertype,
-      subtypes: card.subtypes ? JSON.parse(card.subtypes) : [],
-      hp: card.hp,
-      image_url: card.imageUrl,
-      image_large_url: card.imageLargeUrl,
-      artist: card.artist,
-      set_name: card.setName,
-      set_slug: card.setSlug,
-      game: card.gameName,
-      game_slug: card.gameSlug,
-      prices: priceMap,
-      last_updated: new Date().toISOString().split('T')[0],
+      product: {
+        id: String(product.id),
+        name: product.name,
+        slug: product.slug,
+        number: product.number,
+        rarity: product.rarity,
+        image_url: product.imageUrl,
+        set_name: product.setName,
+        set_slug: product.setSlug,
+        game_name: product.gameName,
+        game_slug: product.gameSlug,
+      },
+      // Raw prices only — graded is not tracked, and saying so beats implying it.
+      prices: prices.map((p) => ({
+        finish: p.subType,
+        market_price: p.marketPrice,
+        low_price: p.lowPrice,
+        mid_price: p.midPrice,
+        high_price: p.highPrice,
+        as_of: p.asOf,
+      })),
+      condition: 'raw',
     });
   } catch (error) {
-    console.error('Error fetching card:', error);
+    console.error('Error fetching product:', error);
     return apiError('Internal server error', 500);
   }
 }

@@ -15,11 +15,13 @@ interface EbayListing {
 
 interface ActiveListingsCarouselProps {
   cardId: number;
-  storeUsername?: string;
 }
 
-export default function ActiveListingsCarousel({ cardId, storeUsername }: ActiveListingsCarouselProps) {
+export default function ActiveListingsCarousel({ cardId }: ActiveListingsCarouselProps) {
   const [listings, setListings] = useState<EbayListing[]>([]);
+  // Which seller to highlight is decided server-side (EBAY_STORE_USERNAME), not
+  // by the client — it feeds an eBay seller filter and must not be caller-controlled.
+  const [storeUsername, setStoreUsername] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,12 +31,12 @@ export default function ActiveListingsCarousel({ cardId, storeUsername }: Active
 
     const fetchListings = async () => {
       try {
-        const url = `/api/v1/ebay/active?cardId=${cardId}${storeUsername ? `&storeUsername=${encodeURIComponent(storeUsername)}` : ""}`;
-        const res = await fetch(url);
+        const res = await fetch(`/api/v1/ebay/active?cardId=${cardId}`);
         if (!res.ok) throw new Error("Failed to fetch listings");
         const data = await res.json();
         if (isMounted && data.success) {
           setListings(data.listings || []);
+          setStoreUsername(data.featuredStore || undefined);
         }
       } catch (err: any) {
         if (isMounted) setError(err.message);
@@ -48,7 +50,7 @@ export default function ActiveListingsCarousel({ cardId, storeUsername }: Active
     return () => {
       isMounted = false;
     };
-  }, [cardId, storeUsername]);
+  }, [cardId]);
 
   if (loading) {
     return (

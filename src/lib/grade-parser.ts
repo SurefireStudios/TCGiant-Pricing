@@ -15,7 +15,9 @@
  * - "Charizard Holo #4 Base Set" (ungraded)
  */
 
-export type GradingCompany = 'PSA' | 'CGC' | 'BGS' | 'TAG' | 'UNGRADED';
+import { decodeHtmlEntities } from './html-entities';
+
+export type GradingCompany = 'PSA' | 'CGC' | 'BGS' | 'SGC' | 'TAG' | 'UNGRADED';
 
 export type CardVariant = 'unlimited' | '1st_edition' | 'reverse_holo' | 'shadowless';
 
@@ -34,6 +36,7 @@ export type CardCondition =
   | 'PSA_10'
   | 'CGC_10'
   | 'BGS_10'
+  | 'SGC_10'
   | 'TAG_10';
 
 export interface GradeResult {
@@ -45,9 +48,85 @@ export interface GradeResult {
 }
 
 /**
+ * Condition adjectives sellers put between the grading company and the number.
+ *
+ * This is deliberately a CLOSED set. It's what makes the patterns below safe:
+ * because only these specific words may sit between company and grade, a title
+ * like "PSA Charizard 4/102" cannot be misread as "PSA grade 4".
+ *
+ * Derived from the actual title shapes in our sales table — the most common
+ * misses were "PSA MINT 9", "CGC GEM MINT 10", "PSA NM-MT 8" and "PSA GRADED 7".
+ */
+const GRADE_ADJECTIVES = [
+  'GEM\\s*MINT',
+  'GEM\\s*MT',
+  'GEM',
+  'PRISTINE',
+  'PERFECT',
+  'BLACK\\s*LABEL',
+  'NEAR\\s*MINT',
+  'NM[\\s/-]*MINT',
+  'NM[\\s/-]*MT',
+  'MINT',
+  'MT',
+  'NM',
+  'EX[\\s/-]*MT',
+  'EXMT',
+  'EX',
+  'VG[\\s/-]*EX',
+  'VG',
+  'GOOD',
+  'GD',
+  'FAIR',
+  'POOR',
+  'PR',
+].join('|');
+
+/**
+ * Punctuation and whitespace allowed between the parts.
+ *
+ * Safe to be permissive here: it only matches punctuation and spaces, never
+ * letters, so it cannot bridge company and an unrelated word.
+ * Covers: "PSA-8", "PSA: NM 7", "PSA. 7", 'CGC "MINT 9"', "(BGS) 7".
+ */
+const SEPARATOR = '[\\s.:,;\\-–—"\'“”()\\[\\]]*';
+
+/** Optional "GRADE"/"GRADED" filler: "BGS GRADE 9", "PSA GRADED: 7" */
+const GRADE_FILLER = `(?:GRADED?${SEPARATOR})?`;
+
+/**
+ * A grade number: 1-10, optionally with one decimal place.
+ * The trailing \b stops "PSA 1999" matching as grade 19.
+ */
+const GRADE_NUMBER = '(\\d{1,2}(?:\\.\\d)?)\\b';
+
+/**
+ * Build the forward pattern for a company:
+ *   <COMPANY> [sep] [GRADED] [adjective] [+/-] <number>
+ */
+function forwardPattern(companyToken: string): RegExp {
+  return new RegExp(
+    // Leading \b only. A trailing \b would break the very common no-space
+    // forms — "PSA10", "PSA9", "CGC9.5" — because there is no word boundary
+    // between a letter and a digit. Safety still holds: what follows must be
+    // punctuation, a closed-set adjective, or the grade number itself, so
+    // "PSAX" or "PSANDBOX" cannot match.
+    `\\b(?:${companyToken})` +
+      SEPARATOR +
+      GRADE_FILLER +
+      // Up to two stacked adjectives: "BGS Black Label Pristine 10"
+      `(?:(?:${GRADE_ADJECTIVES})[+\\-]?${SEPARATOR}){0,2}` +
+      GRADE_NUMBER,
+    'i'
+  );
+}
+
+/**
  * Patterns for each grading company.
  * Each pattern captures the grade number after the company name.
- * We use multiple patterns per company to handle variations.
+ *
+ * Order matters: the first company whose pattern matches wins, so titles that
+ * name two companies ("PSA CGC VG-EX 3") resolve to the first parseable one.
  */
 const GRADING_PATTERNS: {
   company: GradingCompany;
@@ -56,41 +135,49 @@ const GRADING_PATTERNS: {
   {
     company: 'PSA',
     patterns: [
-      // "PSA 10", "PSA10", "PSA 9.5", "PSA GEM MINT 10", "PSA GEM MT 10"
-      /\bPSA\s*(?:GEM\s*(?:MINT|MT)\s*)?(\d+(?:\.\d+)?)\b/i,
-      // "PSA AUTHENTIC" or "PSA A" (authenticated but not graded — treat as ungraded)
-      /\bPSA\s+(?:AUTHENTIC|AUTH)\b/i,
+      // "PSA 10", "PSA10", "PSA 9.5", "PSA GEM MINT 10", "PSA MINT 9",
+      // "PSA NM-MT 8", "PSA GRADED 7", "PSA: NM 6", "PSA - EX-MT 5"
+      forwardPattern('PSA'),
       // Reverse: "10 PSA"
-      /\b(\d+(?:\.\d+)?)\s*PSA\b/i,
+      new RegExp(`\\b${GRADE_NUMBER}\\s*PSA\\b`, 'i'),
     ],
   },
   {
     company: 'BGS',
     patterns: [
-      // "BGS 9.5", "BGS10", "BGS PRISTINE 10", "BGS BLACK LABEL 10"
-      /\bBGS\s*(?:PRISTINE\s*|BLACK\s*LABEL\s*)?(\d+(?:\.\d+)?)\b/i,
-      // "BECKETT BGS 9.5", "Beckett 9"
-      /\bBECKETT\s*(?:BGS\s*)?(\d+(?:\.\d+)?)\b/i,
+      // "BGS 9.5", "BGS10", "BGS PRISTINE 10", "BGS BLACK LABEL 10",
+      // "BGS GRADE 9", "BECKETT BGS 9.5", "Beckett 9"
+      forwardPattern('BGS|BECKETT\\s*(?:BGS)?'),
       // Reverse: "9.5 BGS"
-      /\b(\d+(?:\.\d+)?)\s*BGS\b/i,
+      new RegExp(`\\b${GRADE_NUMBER}\\s*BGS\\b`, 'i'),
     ],
   },
   {
     company: 'CGC',
     patterns: [
-      // "CGC 10", "CGC PERFECT 10", "CGC PRISTINE 10", "CGC9.5"
-      /\bCGC\s*(?:PERFECT\s*|PRISTINE\s*)?(\d+(?:\.\d+)?)\b/i,
+      // "CGC 10", "CGC PERFECT 10", "CGC GEM MINT 10", "CGC MINT 9",
+      // "CGC NM/MINT+ 9", "CGC NEAR MINT 8", "CGC GRADE 7", "CGC9.5"
+      forwardPattern('CGC'),
       // Reverse: "10 CGC"
-      /\b(\d+(?:\.\d+)?)\s*CGC\b/i,
+      new RegExp(`\\b${GRADE_NUMBER}\\s*CGC\\b`, 'i'),
+    ],
+  },
+  {
+    company: 'SGC',
+    patterns: [
+      // "SGC 9", "SGC GRADED 8", "SGC MINT 9"
+      forwardPattern('SGC'),
+      // Reverse: "9 SGC"
+      new RegExp(`\\b${GRADE_NUMBER}\\s*SGC\\b`, 'i'),
     ],
   },
   {
     company: 'TAG',
     patterns: [
       // "TAG 10", "TAG GEM MINT 10", "TAG10"
-      /\bTAG\s*(?:GEM\s*(?:MINT|MT)\s*)?(\d+(?:\.\d+)?)\b/i,
+      forwardPattern('TAG'),
       // Reverse: "10 TAG"
-      /\b(\d+(?:\.\d+)?)\s*TAG\b/i,
+      new RegExp(`\\b${GRADE_NUMBER}\\s*TAG\\b`, 'i'),
     ],
   },
 ];
@@ -119,12 +206,13 @@ const UNGRADED_KEYWORDS = [
   /\bNEAR\s*MINT\b/i,
   /\bLP\b/i,
   /\bLIGHTLY\s*PLAYED\b/i,
-  /\bMP\b/i,
   /\bMODERATELY\s*PLAYED\b/i,
-  /\bHP\b/i,
   /\bHEAVILY\s*PLAYED\b/i,
   /\bDAMAGED\b/i,
   /\bPOOR\b/i,
+  // NOTE: bare \bHP\b and \bMP\b were removed. "HP" is a Pokémon stat that
+  // appears in a large share of card titles ("Charizard 120 HP"), so matching
+  // it flagged ordinary listings as explicitly-ungraded and skewed confidence.
 ];
 
 /**
@@ -143,6 +231,8 @@ function gradeToCondition(
         return 'CGC_10';
       case 'BGS':
         return 'BGS_10';
+      case 'SGC':
+        return 'SGC_10';
       case 'TAG':
         return 'TAG_10';
       default:
@@ -176,16 +266,21 @@ function isValidGrade(value: number): boolean {
  */
 function parseVariant(title: string): CardVariant {
   const text = title.toLowerCase();
-  
-  if (/\b(1st edition|first edition|1st ed)\b/.test(text)) {
+
+  if (/\b(1st\s*ed(ition)?|first\s*edition)\b/.test(text)) {
     return '1st_edition';
   }
-  
-  if (/\b(shadowless)\b/.test(text)) {
+
+  if (/\bshadowless\b/.test(text)) {
     return 'shadowless';
   }
-  
-  if (/\b(reverse holo|reverse foil|rev holo)\b/.test(text)) {
+
+  // Sellers abbreviate this heavily: "Reverse Holo", "Reverse Foil",
+  // "Rev Holo", "REV.FOIL", "rev-foil", "reverse holofoil". The previous
+  // pattern required a literal space, so "REV.FOIL" slipped through — which is
+  // exactly how a $28,600 reverse-foil PSA 10 ended up pooled with ~$200
+  // non-reverse sales of the same card.
+  if (/\brev(erse)?[\s.\-]*(holo(foil)?|foil)\b/.test(text)) {
     return 'reverse_holo';
   }
 
@@ -212,8 +307,12 @@ function parseVariant(title: string): CardVariant {
  * // { gradingCompany: 'UNGRADED', gradeValue: null, condition: 'UNGRADED', confidence: 'high' }
  */
 export function parseGrade(title: string, description?: string): GradeResult {
-  const text = title.trim();
-  const fullText = description ? `${text} ${description.trim()}` : text;
+  // Scraped titles arrive with HTML entities intact ("NM-MT&#43;9"), which
+  // hides the real characters from every pattern below.
+  const text = decodeHtmlEntities(title).trim();
+  const fullText = description
+    ? `${text} ${decodeHtmlEntities(description).trim()}`
+    : text;
 
   const variant = parseVariant(fullText);
 
@@ -314,6 +413,41 @@ export function parseGrades(
 }
 
 /**
+ * Conditions where the grading company is part of the identity of the price.
+ * A "PSA 10" and a "CGC 10" are different products that trade at different
+ * prices; a "Grade 9" is a grade 9 regardless of who slabbed it.
+ */
+const COMPANY_SPECIFIC_CONDITIONS = new Set<CardCondition>([
+  'PSA_10',
+  'CGC_10',
+  'BGS_10',
+  'SGC_10',
+  'TAG_10',
+]);
+
+/**
+ * Canonical grading company for a PRICE row.
+ *
+ * PriceCharting's price table — which our condition enum mirrors — has one
+ * company-agnostic column per grade ("Grade 9") and separate columns only for
+ * the 10s ("PSA 10", "CGC 10", ...). Keying price rows on the company for every
+ * condition therefore splits a single logical price into up to five rows, one
+ * per grader, each computed from a fraction of the sales. The card page then
+ * renders whichever row the query happened to return first.
+ *
+ * Sales keep their true grading company for provenance; only the aggregated
+ * price rows are collapsed.
+ */
+export function canonicalGradingCompany(
+  condition: CardCondition | string,
+  company: GradingCompany | string
+): GradingCompany {
+  return COMPANY_SPECIFIC_CONDITIONS.has(condition as CardCondition)
+    ? (company as GradingCompany)
+    : 'UNGRADED';
+}
+
+/**
  * Get display label for a CardCondition.
  */
 export function getConditionLabel(condition: CardCondition): string {
@@ -332,6 +466,7 @@ export function getConditionLabel(condition: CardCondition): string {
     PSA_10: 'PSA 10',
     CGC_10: 'CGC 10',
     BGS_10: 'BGS 10',
+    SGC_10: 'SGC 10',
     TAG_10: 'TAG 10',
   };
   return labels[condition];
@@ -356,6 +491,7 @@ export function getAllConditions(): CardCondition[] {
     'PSA_10',
     'CGC_10',
     'BGS_10',
+    'SGC_10',
     'TAG_10',
   ];
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "sales" ALTER COLUMN "ebay_item_id" SET DATA TYPE text;

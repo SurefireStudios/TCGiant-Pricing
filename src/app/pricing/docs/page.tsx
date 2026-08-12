@@ -244,18 +244,31 @@ export default function ApiDocsPage() {
             <tbody>
               <tr>
                 <td><span className="badge" style={{ background: "rgba(99,102,241,0.15)", color: "var(--color-primary-light)", border: "1px solid rgba(99,102,241,0.2)" }}>Free</span></td>
-                <td className="font-mono">10</td>
-                <td className="font-mono">100</td>
+                <td className="font-mono">30</td>
+                <td className="font-mono">1,000</td>
                 <td>$0</td>
               </tr>
               <tr>
+                <td><span className="badge" style={{ background: "rgba(99,102,241,0.15)", color: "var(--color-primary-light)", border: "1px solid rgba(99,102,241,0.2)" }}>Basic</span></td>
+                <td className="font-mono">120</td>
+                <td className="font-mono">20,000</td>
+                <td>TBD</td>
+              </tr>
+              <tr>
                 <td><span className="badge" style={{ background: "rgba(245,158,11,0.15)", color: "var(--color-accent)", border: "1px solid rgba(245,158,11,0.2)" }}>Pro</span></td>
-                <td className="font-mono">60</td>
-                <td className="font-mono">10,000</td>
+                <td className="font-mono">600</td>
+                <td className="font-mono">200,000</td>
                 <td>TBD</td>
               </tr>
             </tbody>
           </table>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", marginTop: "var(--space-md)" }}>
+            Exceeding a limit returns <code style={{ background: "var(--bg-elevated)", padding: "2px 6px", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: "0.8rem" }}>429</code> with a{" "}
+            <code style={{ background: "var(--bg-elevated)", padding: "2px 6px", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: "0.8rem" }}>Retry-After</code> header.
+            Keys are issued on request — email{" "}
+            <a href="mailto:api@tcgiant.com" style={{ color: "var(--color-primary-light)" }}>api@tcgiant.com</a>{" "}
+            with your use case. There is no self-serve signup yet.
+          </p>
         </section>
 
         {/* Error Handling */}

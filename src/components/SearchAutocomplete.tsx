@@ -6,8 +6,8 @@ interface SearchResult {
   id: string;
   name: string;
   slug: string;
-  card_number: string;
-  rarity: string;
+  number: string | null;
+  game_name: string;
   image_url: string;
   set_name: string;
   set_slug: string;
@@ -33,14 +33,16 @@ export default function SearchAutocomplete() {
 
     setIsLoading(true);
     try {
-      const res = await fetch(
-        `/api/v1/cards?key=tcg_internal_dev_key_change_in_production&q=${encodeURIComponent(searchQuery)}&limit=8`
-      );
+      // Public typeahead endpoint. This used to call /api/v1/cards with an
+      // API key embedded in client-side JavaScript, which shipped the key to
+      // every visitor. A name lookup needs a narrow surface and a rate limit,
+      // not a credential.
+      const res = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}`);
       const data = await res.json();
 
-      if (data.status === "success" && data.products) {
-        setResults(data.products);
-        setIsOpen(data.products.length > 0);
+      if (Array.isArray(data.results)) {
+        setResults(data.results);
+        setIsOpen(data.results.length > 0);
         setSelectedIndex(-1);
       }
     } catch (err) {
@@ -282,16 +284,17 @@ export default function SearchAutocomplete() {
                     {result.set_name}
                   </span>
                   <span>•</span>
-                  <span>#{result.card_number}</span>
+                  <span>#{result.number}</span>
                 </div>
               </div>
 
-              {/* Rarity Badge */}
+              {/* Game badge — search now spans several games, so which game
+                  a card belongs to matters more than its rarity. */}
               <span
                 className="badge badge-ungraded"
                 style={{ fontSize: "0.65rem", flexShrink: 0 }}
               >
-                {result.rarity}
+                {result.game_name}
               </span>
 
               {/* Arrow */}

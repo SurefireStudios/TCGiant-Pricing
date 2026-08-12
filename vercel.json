@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/cron/scrape",
-      "schedule": "0 0 * * *"
+      "path": "/api/cron/sync",
+      "schedule": "0 * * * *"
     }
   ]
 }

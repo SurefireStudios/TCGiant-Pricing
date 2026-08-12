@@ -1,12 +1,85 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, desc, asc } from "drizzle-orm";
+import { and, asc, eq, gte } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import * as schema from "@/db/schema";
-import CardDetailClient from "./CardDetailClient";
+import FallbackImage from "@/components/FallbackImage";
+import ProductPriceChart, { type FinishSeries } from "@/components/ProductPriceChart";
 
-export const revalidate = 3600; // Cache for 1 hour at edge
+export const revalidate = 3600;
+
+/**
+ * Render a date-only value ("2026-08-12") without timezone drift.
+ *
+ * new Date("2026-08-12") is parsed as UTC midnight, so toLocaleDateString in
+ * any negative-offset timezone renders the previous day — a price synced today
+ * displayed as "as of yesterday", which quietly undermines the whole point of
+ * showing an as-of date.
+ */
+function formatDay(value: string): string {
+  const [y, m, d] = value.slice(0, 10).split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+const money = (cents: number | null) =>
+  cents === null ? "—" : `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+function db() {
+  return drizzle(neon(process.env.DATABASE_URL!), { schema });
+}
+
+/** Load the product and everything shown on its page. */
+async function loadProduct(slug: string) {
+  const database = db();
+
+  const [product] = await database
+    .select({
+      id: schema.tcgProducts.id,
+      name: schema.tcgProducts.name,
+      number: schema.tcgProducts.number,
+      rarity: schema.tcgProducts.rarity,
+      imageUrl: schema.tcgProducts.imageUrl,
+      sourceUrl: schema.tcgProducts.sourceUrl,
+      groupName: schema.tcgGroups.name,
+      groupSlug: schema.tcgGroups.slug,
+      publishedOn: schema.tcgGroups.publishedOn,
+      gameName: schema.tcgCategories.name,
+      gameSlug: schema.tcgCategories.slug,
+    })
+    .from(schema.tcgProducts)
+    .innerJoin(schema.tcgGroups, eq(schema.tcgGroups.id, schema.tcgProducts.groupId))
+    .innerJoin(schema.tcgCategories, eq(schema.tcgCategories.id, schema.tcgProducts.categoryId))
+    .where(eq(schema.tcgProducts.slug, slug))
+    .limit(1);
+
+  if (!product) return null;
+
+  const latest = await database
+    .select()
+    .from(schema.tcgLatestPrices)
+    .where(eq(schema.tcgLatestPrices.productId, product.id))
+    .orderBy(asc(schema.tcgLatestPrices.subType));
+
+  // 180 days is plenty of chart, and keeps the query bounded.
+  const since = new Date(Date.now() - 180 * 86_400_000).toISOString().slice(0, 10);
+  const history = await database
+    .select({
+      subType: schema.tcgPrices.subType,
+      asOf: schema.tcgPrices.asOf,
+      marketPrice: schema.tcgPrices.marketPrice,
+    })
+    .from(schema.tcgPrices)
+    .where(and(eq(schema.tcgPrices.productId, product.id), gte(schema.tcgPrices.asOf, since)))
+    .orderBy(asc(schema.tcgPrices.asOf));
+
+  return { product, latest, history };
+}
 
 export async function generateMetadata({
   params,
@@ -14,26 +87,17 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const sqlClient = neon(process.env.DATABASE_URL!);
-  const db = drizzle(sqlClient, { schema });
+  const data = await loadProduct(slug);
+  if (!data) return { title: "Card Not Found | TCGiant" };
 
-  const cards = await db
-    .select({
-      name: schema.cards.name,
-      setName: schema.sets.name,
-    })
-    .from(schema.cards)
-    .innerJoin(schema.sets, eq(schema.cards.setId, schema.sets.id))
-    .where(eq(schema.cards.slug, slug))
-    .limit(1);
-
-  if (cards.length === 0) {
-    return { title: "Card Not Found | TCGiant" };
-  }
+  const { product, latest } = data;
+  const headline = latest.find((l) => l.marketPrice !== null)?.marketPrice ?? null;
 
   return {
-    title: `${cards[0].name} - ${cards[0].setName} Price | TCGiant`,
-    description: `Market prices for ${cards[0].name} from ${cards[0].setName}. View ungraded and graded (PSA, CGC, BGS, TAG) prices, price history, and recent eBay sales.`,
+    title: `${product.name} ${product.number ? `#${product.number} ` : ""}— ${product.groupName} Price | TCGiant`,
+    description:
+      `Current market price for ${product.name} from ${product.groupName} (${product.gameName})` +
+      `${headline ? `, currently ${money(headline)}` : ""}. Price history and every printing.`,
   };
 }
 
@@ -43,159 +107,120 @@ export default async function CardDetailPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
+  const data = await loadProduct(slug);
+  if (!data) notFound();
 
-  const sqlClient = neon(process.env.DATABASE_URL!);
-  const db = drizzle(sqlClient, { schema });
+  const { product, latest, history } = data;
 
-  // Fetch card with set and game joins
-  const results = await db
-    .select({
-      id: schema.cards.id,
-      name: schema.cards.name,
-      slug: schema.cards.slug,
-      cardNumber: schema.cards.cardNumber,
-      rarity: schema.cards.rarity,
-      supertype: schema.cards.supertype,
-      subtypes: schema.cards.subtypes,
-      hp: schema.cards.hp,
-      imageUrl: schema.cards.imageUrl,
-      imageLargeUrl: schema.cards.imageLargeUrl,
-      artist: schema.cards.artist,
-      variant: schema.cards.variant,
-      setName: schema.sets.name,
-      setSlug: schema.sets.slug,
-      gameName: schema.games.name,
-      gameSlug: schema.games.slug,
-    })
-    .from(schema.cards)
-    .innerJoin(schema.sets, eq(schema.cards.setId, schema.sets.id))
-    .innerJoin(schema.games, eq(schema.sets.gameId, schema.games.id))
-    .where(eq(schema.cards.slug, slug))
-    .limit(1);
-
-  if (results.length === 0) {
-    notFound();
-  }
-
-  const card = results[0];
-
-  // Fetch current prices
-  const prices = await db
-    .select()
-    .from(schema.currentPrices)
-    .where(eq(schema.currentPrices.cardId, card.id));
-
-  const priceMap: Record<string, number | null> = {};
-  const volumeMap: Record<string, string | null> = {};
-  for (const p of prices) {
-    priceMap[p.condition] = p.marketPrice;
-    volumeMap[p.condition] = p.volumeText;
-  }
-
-  // Fetch recent sales
-  const salesData = await db
-    .select()
-    .from(schema.sales)
-    .where(eq(schema.sales.cardId, card.id))
-    .orderBy(desc(schema.sales.saleDate))
-    .limit(100);
-
-  const formattedSales = salesData.map(s => ({
-    id: s.id.toString(),
-    salePrice: s.salePrice,
-    saleDate: s.saleDate.toISOString().split("T")[0],
-    condition: s.condition,
-    gradingCompany: s.gradingCompany,
-    gradeValue: s.gradeValue !== null ? Number(s.gradeValue) : null,
-    ebayTitle: s.ebayTitle || "",
-    ebayUrl: s.ebayUrl,
-    isOutlier: s.isOutlier
-  }));
-
-  // Fetch all historical sales for rich price history timeline
-  const allSalesForHistory = await db
-    .select({
-      salePrice: schema.sales.salePrice,
-      saleDate: schema.sales.saleDate,
-      condition: schema.sales.condition,
-      isOutlier: schema.sales.isOutlier,
-    })
-    .from(schema.sales)
-    .where(eq(schema.sales.cardId, card.id))
-    .orderBy(asc(schema.sales.saleDate));
-
-  // Build price history timeline grouped by date & condition
-  const dateMap: Record<string, Record<string, { totalCents: number; count: number }>> = {};
-
-  for (const s of allSalesForHistory) {
-    if (s.isOutlier) continue;
-    const dateStr = s.saleDate.toISOString().split("T")[0];
-    if (!dateMap[dateStr]) dateMap[dateStr] = {};
-    if (!dateMap[dateStr][s.condition]) dateMap[dateStr][s.condition] = { totalCents: 0, count: 0 };
-    dateMap[dateStr][s.condition].totalCents += s.salePrice;
-    dateMap[dateStr][s.condition].count += 1;
-  }
-
-  const salesHistoryPoints: any[] = [];
-  for (const dateStr of Object.keys(dateMap).sort()) {
-    for (const cond of Object.keys(dateMap[dateStr])) {
-      const avgPrice = Math.round(dateMap[dateStr][cond].totalCents / dateMap[dateStr][cond].count);
-      const dateObj = new Date(dateStr);
-      salesHistoryPoints.push({
-        date: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-        fullDate: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-        price: avgPrice,
-        sales: dateMap[dateStr][cond].count,
-        condition: cond,
-        rawDate: dateStr,
-      });
-    }
-  }
-
-  let formattedHistory = salesHistoryPoints;
-
-  if (formattedHistory.length === 0) {
-    const historyData = await db
-      .select()
-      .from(schema.priceSnapshots)
-      .where(eq(schema.priceSnapshots.cardId, card.id))
-      .orderBy(asc(schema.priceSnapshots.snapshotDate));
-
-    formattedHistory = historyData.map(h => {
-      const dateObj = new Date(h.snapshotDate);
-      return {
-        date: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-        fullDate: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-        price: h.marketPrice || 0,
-        sales: h.saleCount,
-        condition: h.condition,
-        rawDate: h.snapshotDate,
-      };
+  // One series per finish, so a card with Normal + Reverse Holofoil charts both.
+  const bySubType = new Map<string, FinishSeries>();
+  for (const row of history) {
+    if (row.marketPrice === null) continue;
+    const series = bySubType.get(row.subType) ?? { subType: row.subType, points: [] };
+    series.points.push({
+      date: String(row.asOf),
+      label: formatDay(String(row.asOf)).replace(/,? \d{4}$/, ""),
+      price: row.marketPrice,
     });
+    bySubType.set(row.subType, series);
   }
 
-  // Serialize card data for client component
-  const cardData = {
-    id: card.id,
-    name: card.name,
-    cardNumber: card.cardNumber,
-    setName: card.setName,
-    setSlug: card.setSlug,
-    game: card.gameName,
-    gameSlug: card.gameSlug,
-    variant: card.variant,
-    rarity: card.rarity || "Unknown",
-    supertype: card.supertype || "Pokémon",
-    hp: card.hp || null,
-    artist: card.artist || "Unknown",
-    imageUrl: card.imageLargeUrl || card.imageUrl || "",
-    prices: priceMap,
-    volumes: volumeMap,
-    saleCount: formattedSales.length,
-    lastUpdated: new Date().toISOString().split("T")[0],
-    sales: formattedSales,
-    priceHistory: formattedHistory,
-  };
+  const asOf = latest[0]?.asOf ? String(latest[0].asOf) : null;
 
-  return <CardDetailClient card={cardData} />;
+  return (
+    <div className="container" style={{ paddingTop: "var(--space-2xl)", paddingBottom: "var(--space-3xl)" }}>
+      <nav style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: "var(--space-lg)" }}>
+        <Link href="/pricing" style={{ color: "var(--text-muted)" }}>Pricing</Link>
+        {" / "}
+        <Link href={`/pricing/${product.gameSlug}`} style={{ color: "var(--text-muted)" }}>
+          {product.gameName}
+        </Link>
+        {" / "}
+        <Link href={`/pricing/${product.gameSlug}/${product.groupSlug}`} style={{ color: "var(--text-muted)" }}>
+          {product.groupName}
+        </Link>
+      </nav>
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 280px) minmax(0, 1fr)", gap: "var(--space-2xl)", alignItems: "start" }}>
+        <div className="glass-card" style={{ padding: "var(--space-lg)" }}>
+          <FallbackImage
+            src={product.imageUrl ?? ""}
+            alt={product.name}
+            style={{ width: "100%", height: "auto", borderRadius: "var(--radius-md)" }}
+          />
+        </div>
+
+        <div>
+          <h1 style={{ marginBottom: "var(--space-xs)" }}>{product.name}</h1>
+          <p style={{ color: "var(--text-secondary)", marginBottom: "var(--space-md)" }}>
+            {product.groupName}
+            {product.number ? ` · #${product.number}` : ""}
+            {product.rarity ? ` · ${product.rarity}` : ""}
+          </p>
+
+          <div style={{ display: "flex", gap: "var(--space-sm)", flexWrap: "wrap", marginBottom: "var(--space-xl)" }}>
+            <span className="badge badge-ungraded">{product.gameName}</span>
+            {product.publishedOn && (
+              <span className="badge badge-ungraded">{String(product.publishedOn).slice(0, 4)}</span>
+            )}
+          </div>
+
+          <h2 style={{ fontSize: "1.1rem", marginBottom: "var(--space-md)" }}>Market prices</h2>
+
+          {latest.length === 0 ? (
+            <div className="glass-card" style={{ padding: "var(--space-lg)" }}>
+              <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
+                No price recorded for this product yet.
+              </p>
+            </div>
+          ) : (
+            <table className="data-table" style={{ marginBottom: "var(--space-md)" }}>
+              <thead>
+                <tr>
+                  <th>Finish</th>
+                  <th>Market</th>
+                  <th>Low</th>
+                  <th>Mid</th>
+                  <th>High</th>
+                </tr>
+              </thead>
+              <tbody>
+                {latest.map((row) => (
+                  <tr key={row.subType}>
+                    <td>{row.subType}</td>
+                    <td className="font-mono" style={{ fontWeight: 700, color: "var(--text-primary)" }}>
+                      {money(row.marketPrice)}
+                    </td>
+                    <td className="font-mono">{money(row.lowPrice)}</td>
+                    <td className="font-mono">{money(row.midPrice)}</td>
+                    <td className="font-mono">{money(row.highPrice)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {/* Provenance, stated rather than implied. */}
+          <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+            Raw (ungraded) market prices from TCGplayer
+            {asOf ? `, as of ${formatDay(asOf)}` : ""}.
+            Graded prices are not currently tracked.
+            {product.sourceUrl && (
+              <>
+                {" "}
+                <a href={product.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--color-primary-light)" }}>
+                  View on TCGplayer →
+                </a>
+              </>
+            )}
+          </p>
+        </div>
+      </div>
+
+      <section style={{ marginTop: "var(--space-3xl)" }}>
+        <h2 style={{ fontSize: "1.1rem", marginBottom: "var(--space-md)" }}>Price history</h2>
+        <ProductPriceChart series={[...bySubType.values()]} />
+      </section>
+    </div>
+  );
 }

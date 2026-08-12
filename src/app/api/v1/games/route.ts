@@ -1,37 +1,40 @@
-/**
- * API Route: GET /api/v1/games
- *
- * List all supported TCG brands/games.
- */
+/** API Route: GET /api/v1/games — enabled games, with counts. */
 
 import { NextRequest } from 'next/server';
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
+import { desc, eq, sql } from 'drizzle-orm';
 import { validateApiKey, apiError, apiSuccess } from '@/lib/api-auth';
 import * as schema from '@/db/schema';
 
 export async function GET(request: NextRequest) {
-  const authResult = await validateApiKey(request);
-  if (!authResult.valid) {
-    return apiError(authResult.error, authResult.status);
-  }
+  const auth = await validateApiKey(request);
+  if (!auth.valid) return apiError(auth.error, auth.status, auth.retryAfter);
 
   try {
-    const sql = neon(process.env.DATABASE_URL!);
-    const db = drizzle(sql, { schema });
-
-    const games = await db
-      .select()
-      .from(schema.games)
-      .orderBy(schema.games.sortOrder);
+    const db = drizzle(neon(process.env.DATABASE_URL!), { schema });
+    const rows = await db
+      .select({
+        id: schema.tcgCategories.id,
+        name: schema.tcgCategories.name,
+        slug: schema.tcgCategories.slug,
+        sets: sql<number>`count(distinct ${schema.tcgGroups.id})`,
+        products: sql<number>`count(distinct ${schema.tcgProducts.id})`,
+      })
+      .from(schema.tcgCategories)
+      .leftJoin(schema.tcgGroups, eq(schema.tcgGroups.categoryId, schema.tcgCategories.id))
+      .leftJoin(schema.tcgProducts, eq(schema.tcgProducts.groupId, schema.tcgGroups.id))
+      .where(eq(schema.tcgCategories.isEnabled, true))
+      .groupBy(schema.tcgCategories.id, schema.tcgCategories.name, schema.tcgCategories.slug)
+      .orderBy(desc(sql`count(distinct ${schema.tcgProducts.id})`));
 
     return apiSuccess({
-      games: games.map((g) => ({
-        id: g.id.toString(),
-        name: g.name,
-        slug: g.slug,
-        is_active: g.isActive,
-        image_url: g.imageUrl,
+      games: rows.map((r) => ({
+        id: String(r.id),
+        name: r.name,
+        slug: r.slug,
+        sets: Number(r.sets),
+        products: Number(r.products),
       })),
     });
   } catch (error) {

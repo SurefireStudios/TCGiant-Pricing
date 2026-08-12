@@ -138,7 +138,10 @@ async function seed() {
           totalCards: set.cardCount?.total || setDetails.cards.length,
           externalId: setId,
           symbolUrl: null,
-          logoUrl: null,
+          // The column is `imageUrl`, not `logoUrl`. This silently did nothing
+          // (drizzle ignores unknown keys at runtime) and was invisible because
+          // src/scripts was excluded from typechecking.
+          imageUrl: null,
         })
         .returning({ id: schema.sets.id });
       

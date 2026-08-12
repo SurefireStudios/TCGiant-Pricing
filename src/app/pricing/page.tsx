@@ -1,101 +1,95 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/neon-http";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
+import * as schema from "@/db/schema";
 import SearchAutocomplete from "@/components/SearchAutocomplete";
 
-export const revalidate = 3600; // Cache for 1 hour at edge
+export const revalidate = 3600;
 
 export const metadata: Metadata = {
-  title: "Trading Card Prices — Free Ungraded & PSA Price Guide",
+  title: "Trading Card Prices — Pokémon, Lorcana, One Piece & more",
   description:
-    "Track real market prices for Pokemon, YuGiOh, Magic, Lorcana, One Piece and more. Ungraded and graded (PSA, CGC, BGS, TAG) prices from eBay sold data.",
+    "Daily market prices for Pokémon, Lorcana, One Piece and other trading card games. Every printing and finish, sourced from TCGplayer.",
 };
 
-const GAMES = [
-  {
-    name: "Pokémon",
-    slug: "pokemon",
-    description: "150+ sets · 18,000+ cards",
-    active: true,
-    emoji: "⚡",
-    gradient: "linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)",
-  },
-  {
-    name: "Dragon Ball Z",
-    slug: "dragon-ball-z",
-    description: "Coming Soon",
-    active: false,
-    emoji: "🐉",
-    gradient: "linear-gradient(135deg, #f97316 0%, #ea580c 100%)",
-  },
-  {
-    name: "Lorcana",
-    slug: "lorcana",
-    description: "Coming Soon",
-    active: false,
-    emoji: "✨",
-    gradient: "linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)",
-  },
-  {
-    name: "Magic the Gathering",
-    slug: "magic",
-    description: "Coming Soon",
-    active: false,
-    emoji: "🔮",
-    gradient: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
-  },
-  {
-    name: "One Piece",
-    slug: "one-piece",
-    description: "Coming Soon",
-    active: false,
-    emoji: "🏴‍☠️",
-    gradient: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
-  },
-  {
-    name: "YuGiOh",
-    slug: "yugioh",
-    description: "Coming Soon",
-    active: false,
-    emoji: "🃏",
-    gradient: "linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)",
-  },
-];
+function db() {
+  return drizzle(neon(process.env.DATABASE_URL!), { schema });
+}
 
-const POPULAR_SETS = [
-  { name: "Base Set", slug: "pokemon-base-set", year: "1999", cards: 102 },
-  { name: "Jungle", slug: "pokemon-jungle", year: "1999", cards: 64 },
-  { name: "Fossil", slug: "pokemon-fossil", year: "1999", cards: 62 },
-  { name: "Team Rocket", slug: "pokemon-team-rocket", year: "2000", cards: 83 },
-  { name: "Gym Heroes", slug: "pokemon-gym-heroes", year: "2000", cards: 132 },
-  { name: "Neo Genesis", slug: "pokemon-neo-genesis", year: "2000", cards: 111 },
-  { name: "Scarlet & Violet 151", slug: "pokemon-sv-151", year: "2023", cards: 207 },
-  { name: "Crown Zenith", slug: "pokemon-crown-zenith", year: "2023", cards: 230 },
-];
+/**
+ * Everything on this page is measured, not asserted.
+ *
+ * The previous version hardcoded "18,000+ cards" and "Real-time" while the
+ * database held a fraction of that and was days stale, and linked to sets with
+ * no prices at all. Counting at render time costs one cached query an hour and
+ * cannot drift from reality.
+ */
+async function getGames() {
+  return db()
+    .select({
+      id: schema.tcgCategories.id,
+      name: schema.tcgCategories.name,
+      slug: schema.tcgCategories.slug,
+      sets: sql<number>`count(distinct ${schema.tcgGroups.id})`,
+      priced: sql<number>`count(distinct ${schema.tcgLatestPrices.productId})`,
+    })
+    .from(schema.tcgCategories)
+    .leftJoin(schema.tcgGroups, eq(schema.tcgGroups.categoryId, schema.tcgCategories.id))
+    .leftJoin(schema.tcgProducts, eq(schema.tcgProducts.groupId, schema.tcgGroups.id))
+    .leftJoin(schema.tcgLatestPrices, eq(schema.tcgLatestPrices.productId, schema.tcgProducts.id))
+    .where(and(eq(schema.tcgCategories.isEnabled, true), isNotNull(schema.tcgProducts.number)))
+    .groupBy(schema.tcgCategories.id, schema.tcgCategories.name, schema.tcgCategories.slug)
+    .orderBy(desc(sql`count(distinct ${schema.tcgLatestPrices.productId})`));
+}
 
-const CONDITIONS = [
-  "Ungraded",
-  "Grade 1-9",
-  "Grade 9.5",
-  "PSA 10",
-  "CGC 10",
-  "BGS 10",
-  "TAG 10",
-];
+async function getStats() {
+  const [row] = await db()
+    .select({
+      priced: sql<number>`(select count(*) from tcg_latest_prices)`,
+      products: sql<number>`(select count(*) from tcg_products where number is not null)`,
+      games: sql<number>`(select count(*) from tcg_categories where is_enabled)`,
+      freshest: sql<string | null>`(select max(as_of)::text from tcg_latest_prices)`,
+    })
+    .from(sql`(select 1) as _`);
+  return row;
+}
 
-export default function PricingPage() {
+function freshness(asOf: string | null): string {
+  if (!asOf) return "No data";
+  const days = Math.floor((Date.now() - new Date(asOf).getTime()) / 86_400_000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return `${days} days ago`;
+}
+
+const GAME_ACCENT: Record<string, string> = {
+  pokemon: "linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)",
+  "lorcana-tcg": "linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)",
+  "one-piece-card-game": "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
+  yugioh: "linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)",
+  magic: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
+};
+
+export default async function PricingPage() {
+  const [games, stats] = await Promise.all([getGames(), getStats()]);
+
+  const tiles = [
+    { label: "Prices Tracked", value: Number(stats.priced).toLocaleString() },
+    { label: "Cards", value: Number(stats.products).toLocaleString() },
+    { label: "Games", value: String(stats.games) },
+    { label: "Last Updated", value: freshness(stats.freshest) },
+  ];
+
   return (
     <div style={{ position: "relative", zIndex: 1 }}>
-      {/* Hero Section */}
       <section className="hero">
         <div className="container">
-          <h1 className="animate-in">
-            Trading Card Price Guide
-          </h1>
+          <h1 className="animate-in">Trading Card Price Guide</h1>
           <p className="animate-in" style={{ animationDelay: "100ms" }}>
-            Real market prices from eBay sold listings. Track ungraded &amp;
-            graded card values across PSA, CGC, BGS, and TAG.
+            Daily market prices across every printing and finish — sourced from TCGplayer.
           </p>
-
-          {/* Search Bar */}
           <div
             className="animate-in"
             style={{
@@ -110,33 +104,9 @@ export default function PricingPage() {
           >
             <SearchAutocomplete />
           </div>
-
-          {/* Condition badges */}
-          <div
-            className="animate-in"
-            style={{
-              animationDelay: "300ms",
-              display: "flex",
-              flexWrap: "wrap",
-              justifyContent: "center",
-              gap: "var(--space-sm)",
-              marginTop: "var(--space-xl)",
-            }}
-          >
-            {CONDITIONS.map((condition) => (
-              <span
-                key={condition}
-                className="badge badge-ungraded"
-                style={{ fontSize: "0.7rem" }}
-              >
-                {condition}
-              </span>
-            ))}
-          </div>
         </div>
       </section>
 
-      {/* Stats Bar */}
       <section
         style={{
           borderTop: "1px solid var(--border-subtle)",
@@ -147,33 +117,22 @@ export default function PricingPage() {
       >
         <div
           className="container"
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            gap: "var(--space-3xl)",
-            flexWrap: "wrap",
-          }}
+          style={{ display: "flex", justifyContent: "center", gap: "var(--space-3xl)", flexWrap: "wrap" }}
         >
-          {[
-            { label: "Cards Tracked", value: "18,000+" },
-            { label: "Price Updates", value: "Real-time" },
-            { label: "Grading Companies", value: "4" },
-            { label: "Conditions", value: "15" },
-          ].map((stat) => (
-            <div key={stat.label} style={{ textAlign: "center" }}>
+          {tiles.map((s) => (
+            <div key={s.label} style={{ textAlign: "center" }}>
               <div
                 className="font-mono"
                 style={{
                   fontSize: "1.5rem",
                   fontWeight: 800,
-                  background:
-                    "linear-gradient(135deg, var(--color-primary-light), var(--color-accent))",
+                  background: "linear-gradient(135deg, var(--color-primary-light), var(--color-accent))",
                   WebkitBackgroundClip: "text",
                   WebkitTextFillColor: "transparent",
                   backgroundClip: "text",
                 }}
               >
-                {stat.value}
+                {s.value}
               </div>
               <div
                 style={{
@@ -184,114 +143,46 @@ export default function PricingPage() {
                   fontWeight: 600,
                 }}
               >
-                {stat.label}
+                {s.label}
               </div>
             </div>
           ))}
         </div>
       </section>
 
-      {/* TCG Games Grid */}
       <section className="section" style={{ marginTop: "var(--space-3xl)" }}>
         <div className="container">
           <div className="section-header">
-            <h2 className="section-title">Trading Card Games</h2>
+            <h2 className="section-title">Games</h2>
           </div>
           <div className="set-grid">
-            {GAMES.map((game) => (
-              <a
-                key={game.slug}
-                href={game.active ? `/pricing/${game.slug}` : "#"}
-                className={`glass-card game-card ${game.active ? "active" : "coming-soon"}`}
-                style={
-                  game.active
-                    ? {}
-                    : { pointerEvents: "none" as const }
-                }
+            {games.map((g) => (
+              <Link
+                key={g.id}
+                href={`/pricing/${g.slug}`}
+                className="glass-card game-card active"
+                style={{ textDecoration: "none" }}
               >
-                {!game.active && (
-                  <div className="coming-soon-badge">Coming Soon</div>
-                )}
                 <div
                   style={{
                     width: 48,
                     height: 48,
                     borderRadius: "var(--radius-md)",
-                    background: game.gradient,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "1.5rem",
+                    background: GAME_ACCENT[g.slug] ?? "linear-gradient(135deg, #64748b 0%, #475569 100%)",
                     marginBottom: "var(--space-md)",
                   }}
-                >
-                  {game.emoji}
-                </div>
-                <h3>{game.name}</h3>
-                <p>{game.description}</p>
-              </a>
+                />
+                <h3>{g.name}</h3>
+                <p>
+                  {Number(g.sets).toLocaleString()} sets ·{" "}
+                  {Number(g.priced).toLocaleString()} prices
+                </p>
+              </Link>
             ))}
           </div>
         </div>
       </section>
 
-      {/* Popular Pokemon Sets */}
-      <section className="section">
-        <div className="container">
-          <div className="section-header">
-            <h2 className="section-title">Popular Pokémon Sets</h2>
-            <a href="/pricing/pokemon" className="btn btn-ghost btn-sm">
-              View All Sets →
-            </a>
-          </div>
-          <div className="set-grid">
-            {POPULAR_SETS.map((set) => (
-              <a
-                key={set.slug}
-                href={`/pricing/pokemon/${set.slug}`}
-                className="glass-card"
-                style={{
-                  padding: "var(--space-lg)",
-                  display: "block",
-                  textDecoration: "none",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                  }}
-                >
-                  <div>
-                    <h4 style={{ color: "var(--text-primary)", marginBottom: 4 }}>
-                      {set.name}
-                    </h4>
-                    <p
-                      style={{
-                        fontSize: "0.8rem",
-                        color: "var(--text-muted)",
-                      }}
-                    >
-                      {set.year} · {set.cards} cards
-                    </p>
-                  </div>
-                  <div
-                    style={{
-                      color: "var(--text-muted)",
-                      fontSize: "1.25rem",
-                    }}
-                  >
-                    →
-                  </div>
-                </div>
-              </a>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* How It Works */}
       <section
         className="section"
         style={{
@@ -302,66 +193,36 @@ export default function PricingPage() {
         }}
       >
         <div className="container">
-          <h2
-            className="section-title"
-            style={{ textAlign: "center", marginBottom: "var(--space-2xl)" }}
-          >
-            How We Determine Prices
+          <h2 className="section-title" style={{ textAlign: "center", marginBottom: "var(--space-2xl)" }}>
+            How these prices work
           </h2>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-              gap: "var(--space-xl)",
-            }}
-          >
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "var(--space-xl)" }}>
             {[
               {
-                icon: "📊",
-                title: "Real Sales Data",
-                desc: "We track completed eBay sold listings for every card, capturing actual transaction prices — not asking prices.",
-              },
-              {
-                icon: "🧮",
-                title: "Smart Algorithm",
-                desc: "Our pricing engine uses EWMA, median, and age-weighted averages with outlier detection to give you the most accurate market price.",
-              },
-              {
                 icon: "🏷️",
-                title: "15 Conditions",
-                desc: "Prices for Ungraded, Grade 1-9, Grade 9.5, and Grade 10 across PSA, CGC, BGS, and TAG grading companies.",
+                title: "Every printing",
+                desc: "Base Set, Shadowless and 1st Edition are separate products — and each finish (Normal, Holofoil, Reverse Holofoil) is priced on its own.",
+              },
+              {
+                icon: "📈",
+                title: "Real history",
+                desc: "One snapshot per card, per finish, per day, recorded as it happens. Nothing is backfilled or estimated.",
               },
               {
                 icon: "🔄",
-                title: "Constantly Updated",
-                desc: "Prices update throughout the day as new sales data comes in. Never rely on stale pricing data again.",
+                title: "Updated daily",
+                desc: "The catalogue refreshes on a rolling schedule, and every card page shows the date its price was taken.",
+              },
+              {
+                icon: "🎴",
+                title: "More than Pokémon",
+                desc: "Lorcana and One Piece are live, with Yu-Gi-Oh, Magic and others available as we enable them.",
               },
             ].map((item) => (
-              <div
-                key={item.title}
-                style={{
-                  textAlign: "center",
-                  padding: "var(--space-lg)",
-                }}
-              >
-                <div style={{ fontSize: "2rem", marginBottom: "var(--space-md)" }}>
-                  {item.icon}
-                </div>
-                <h3
-                  style={{
-                    fontSize: "1.125rem",
-                    marginBottom: "var(--space-sm)",
-                  }}
-                >
-                  {item.title}
-                </h3>
-                <p
-                  style={{
-                    color: "var(--text-secondary)",
-                    fontSize: "0.875rem",
-                    lineHeight: 1.7,
-                  }}
-                >
+              <div key={item.title} style={{ textAlign: "center", padding: "var(--space-lg)" }}>
+                <div style={{ fontSize: "2rem", marginBottom: "var(--space-md)" }}>{item.icon}</div>
+                <h3 style={{ fontSize: "1.125rem", marginBottom: "var(--space-sm)" }}>{item.title}</h3>
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", lineHeight: 1.7 }}>
                   {item.desc}
                 </p>
               </div>
@@ -370,7 +231,6 @@ export default function PricingPage() {
         </div>
       </section>
 
-      {/* API CTA */}
       <section className="section" style={{ paddingTop: "var(--space-3xl)" }}>
         <div className="container" style={{ textAlign: "center" }}>
           <div
@@ -379,29 +239,17 @@ export default function PricingPage() {
               padding: "var(--space-3xl)",
               maxWidth: 700,
               margin: "0 auto",
-              background:
-                "linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(245, 158, 11, 0.05))",
+              background: "linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(245, 158, 11, 0.05))",
               border: "1px solid var(--border-primary)",
             }}
           >
-            <h2 style={{ marginBottom: "var(--space-md)" }}>
-              🔌 Pricing API
-            </h2>
-            <p
-              style={{
-                color: "var(--text-secondary)",
-                marginBottom: "var(--space-xl)",
-                maxWidth: 500,
-                margin: "0 auto var(--space-xl)",
-              }}
-            >
-              Build apps powered by our pricing data. RESTful JSON API with
-              comprehensive documentation. Access card prices, sales history,
-              and price trends programmatically.
+            <h2 style={{ marginBottom: "var(--space-md)" }}>🔌 Pricing API</h2>
+            <p style={{ color: "var(--text-secondary)", maxWidth: 500, margin: "0 auto var(--space-xl)" }}>
+              Build on our data. RESTful JSON, keyed access, generous free tier.
             </p>
-            <a href="/pricing/docs" className="btn btn-primary btn-lg">
+            <Link href="/pricing/docs" className="btn btn-primary btn-lg">
               View API Documentation
-            </a>
+            </Link>
           </div>
         </div>
       </section>

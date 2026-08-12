@@ -13,8 +13,9 @@ import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
 import { eq, and, sql, asc, desc, isNull, or } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { searchSoldPokemonCards, type EbaySoldItem } from './ebay-client';
 import { parseGrade, type GradeResult } from './grade-parser';
+import { ebayInsightsSource } from './sources/ebay-insights';
+import type { SoldSale } from './sold-data-source';
 
 // --- Types ---
 
@@ -110,27 +111,20 @@ export async function scrapeCard(
   };
 
   try {
-    // Step 1: Search eBay for BOTH raw and graded listings
-    const rawItems = await searchSoldPokemonCards(
-      card.name,
-      card.setName || '',
-      card.cardNumber,
-      { limit: 50, maxPages: 1 }
-    );
-
-    const gradedItems = await searchSoldPokemonCards(
-      card.name,
-      card.setName || '',
-      card.cardNumber,
-      { limit: 50, maxPages: 1, extraKeywords: '(PSA, CGC, BGS, TAG, Grade)' }
-    );
-
-    // Combine and deduplicate
-    const allItemsMap = new Map();
-    for (const item of [...rawItems, ...gradedItems]) {
-      allItemsMap.set(item.itemId, item);
-    }
-    const soldItems = Array.from(allItemsMap.values());
+    // Step 1: Fetch genuine SOLD data.
+    //
+    // This used to call searchSoldPokemonCards, which is backed by the Browse
+    // API and returns ACTIVE listings — so every "sale" recorded here was an
+    // asking price with a future listing-end date standing in for a sale date.
+    // Those rows are gone; this path now uses Marketplace Insights, the only
+    // official source of eBay sold data.
+    const soldItems: SoldSale[] = await ebayInsightsSource.fetchSales({
+      cardName: card.name,
+      setName: card.setName || '',
+      cardNumber: card.cardNumber,
+      variant: card.variant,
+      limit: 100,
+    });
 
     result.ebayResultCount = soldItems.length;
 
@@ -155,15 +149,16 @@ export async function scrapeCard(
           gradingCompany: gradeResult.gradingCompany as typeof schema.gradingCompanyEnum.enumValues[number],
           gradeValue: gradeResult.gradeValue?.toString() ?? null,
           salePrice: item.price,
-          saleDate: new Date(item.soldDate),
-          ebayItemId: item.itemId,
+          saleDate: item.soldDate,
+          ebayItemId: item.externalId,
           ebayTitle: item.title,
-          ebayUrl: item.itemUrl,
+          ebayUrl: item.url,
+          source: item.source,
           isOutlier: false,
           gradeConfidence: gradeResult.confidence,
         });
       } catch (err: any) {
-        result.errors.push(`Item ${item.itemId}: ${err.message}`);
+        result.errors.push(`Item ${item.externalId}: ${err.message}`);
       }
     }
 

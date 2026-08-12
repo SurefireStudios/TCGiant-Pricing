@@ -1,65 +1,70 @@
 import { MetadataRoute } from 'next';
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tcgiant-pricing.vercel.app';
-const CARDS_PER_SITEMAP = 10000;
+const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://pricing.tcgiant.com';
+const PER_SITEMAP = 10000;
+
+function db() {
+  return drizzle(neon(process.env.DATABASE_URL!), { schema });
+}
 
 export async function generateSitemaps() {
-  const sqlClient = neon(process.env.DATABASE_URL!);
-  const db = drizzle(sqlClient, { schema });
-  
-  const countResult = await db.select({ count: sql<number>`count(*)` }).from(schema.cards);
-  const totalCards = Number(countResult[0]?.count || 0);
-  const numSitemaps = Math.ceil(totalCards / CARDS_PER_SITEMAP);
-  
-  // Return an array of sitemap ids
-  const sitemaps = [{ id: 0 }]; // Static routes and sets
-  for (let i = 0; i < numSitemaps; i++) {
-    sitemaps.push({ id: i + 1 });
-  }
-  return sitemaps;
+  const [row] = await db()
+    .select({ count: sql<number>`count(*)` })
+    .from(schema.tcgProducts);
+
+  const total = Number(row?.count ?? 0);
+  // id 0 carries the static routes plus every game and set.
+  return [{ id: 0 }, ...Array.from({ length: Math.ceil(total / PER_SITEMAP) }, (_, i) => ({ id: i + 1 }))];
 }
 
 export default async function sitemap({ id }: { id: number }): Promise<MetadataRoute.Sitemap> {
-  const sqlClient = neon(process.env.DATABASE_URL!);
-  const db = drizzle(sqlClient, { schema });
+  const database = db();
 
   if (id === 0) {
-    // Generate static routes and sets
-    const sets = await db.select({ slug: schema.sets.slug }).from(schema.sets);
-    
-    const staticRoutes = [
-      { url: `${baseUrl}`, lastModified: new Date(), changeFrequency: 'daily', priority: 1.0 },
+    const games = await database
+      .select({ slug: schema.tcgCategories.slug })
+      .from(schema.tcgCategories)
+      .where(eq(schema.tcgCategories.isEnabled, true));
+
+    const sets = await database
+      .select({ gameSlug: schema.tcgCategories.slug, setSlug: schema.tcgGroups.slug })
+      .from(schema.tcgGroups)
+      .innerJoin(schema.tcgCategories, eq(schema.tcgCategories.id, schema.tcgGroups.categoryId))
+      .where(eq(schema.tcgCategories.isEnabled, true));
+
+    return [
+      { url: baseUrl, lastModified: new Date(), changeFrequency: 'daily', priority: 1.0 },
       { url: `${baseUrl}/pricing`, lastModified: new Date(), changeFrequency: 'daily', priority: 0.9 },
-      { url: `${baseUrl}/pricing/pokemon`, lastModified: new Date(), changeFrequency: 'daily', priority: 0.8 },
       { url: `${baseUrl}/pricing/docs`, lastModified: new Date(), changeFrequency: 'weekly', priority: 0.5 },
+      ...games.map((g) => ({
+        url: `${baseUrl}/pricing/${g.slug}`,
+        lastModified: new Date(),
+        changeFrequency: 'daily' as const,
+        priority: 0.8,
+      })),
+      ...sets.map((s) => ({
+        url: `${baseUrl}/pricing/${s.gameSlug}/${s.setSlug}`,
+        lastModified: new Date(),
+        changeFrequency: 'daily' as const,
+        priority: 0.7,
+      })),
     ];
-    
-    const setRoutes = sets.map((s) => ({
-      url: `${baseUrl}/pricing/pokemon/${s.slug}`,
-      lastModified: new Date(),
-      changeFrequency: 'daily',
-      priority: 0.8,
-    }));
-    
-    return [...staticRoutes, ...setRoutes] as MetadataRoute.Sitemap;
   }
 
-  // Generate cards for this sitemap ID
-  const offset = (id - 1) * CARDS_PER_SITEMAP;
-  const cards = await db
-    .select({ slug: schema.cards.slug, updatedAt: schema.cards.updatedAt })
-    .from(schema.cards)
-    .limit(CARDS_PER_SITEMAP)
-    .offset(offset);
-    
-  return cards.map((c) => ({
-    url: `${baseUrl}/pricing/card/${c.slug}`,
-    lastModified: c.updatedAt,
-    changeFrequency: 'weekly',
-    priority: 0.7,
-  })) as MetadataRoute.Sitemap;
+  const products = await database
+    .select({ slug: schema.tcgProducts.slug, updatedAt: schema.tcgProducts.updatedAt })
+    .from(schema.tcgProducts)
+    .limit(PER_SITEMAP)
+    .offset((id - 1) * PER_SITEMAP);
+
+  return products.map((p) => ({
+    url: `${baseUrl}/pricing/card/${p.slug}`,
+    lastModified: p.updatedAt,
+    changeFrequency: 'daily' as const,
+    priority: 0.6,
+  }));
 }

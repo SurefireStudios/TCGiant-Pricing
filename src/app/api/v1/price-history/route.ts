@@ -1,68 +1,57 @@
 /**
  * API Route: GET /api/v1/price-history
  *
- * Get price history snapshots for a card.
+ * Daily price snapshots for one product.
  *
- * Parameters:
- * - card_id: Card ID (required)
- * - condition: Filter by condition (default: UNGRADED)
- * - days: Number of days of history (default: 90, max: 730)
+ * These are recorded observations, one per finish per day — not a reconstruction.
+ * History begins when we began tracking the product, so a recently added card
+ * legitimately returns few points.
  */
 
 import { NextRequest } from 'next/server';
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
-import { eq, and, gte, desc } from 'drizzle-orm';
+import { and, asc, eq, gte } from 'drizzle-orm';
 import { validateApiKey, apiError, apiSuccess } from '@/lib/api-auth';
 import * as schema from '@/db/schema';
 
 export async function GET(request: NextRequest) {
-  const authResult = await validateApiKey(request);
-  if (!authResult.valid) {
-    return apiError(authResult.error, authResult.status);
-  }
+  const auth = await validateApiKey(request);
+  if (!auth.valid) return apiError(auth.error, auth.status, auth.retryAfter);
 
-  const url = new URL(request.url);
-  const cardId = url.searchParams.get('card_id');
-  const condition = url.searchParams.get('condition') || 'UNGRADED';
-  const days = Math.min(730, Math.max(1, parseInt(url.searchParams.get('days') || '90')));
+  const params = request.nextUrl.searchParams;
+  const productId = params.get('product_id') ?? params.get('card_id');
+  const finish = params.get('finish');
+  const days = Math.min(730, Math.max(1, parseInt(params.get('days') || '90')));
 
-  if (!cardId) {
-    return apiError('card_id parameter is required');
-  }
+  if (!productId) return apiError('product_id is required');
 
   try {
-    const sqlClient = neon(process.env.DATABASE_URL!);
-    const db = drizzle(sqlClient, { schema });
+    const db = drizzle(neon(process.env.DATABASE_URL!), { schema });
+    const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    const startDateStr = startDate.toISOString().split('T')[0];
+    const filters = [
+      eq(schema.tcgPrices.productId, parseInt(productId, 10)),
+      gte(schema.tcgPrices.asOf, since),
+    ];
+    if (finish) filters.push(eq(schema.tcgPrices.subType, finish));
 
-    const snapshots = await db
+    const rows = await db
       .select()
-      .from(schema.priceSnapshots)
-      .where(
-        and(
-          eq(schema.priceSnapshots.cardId, parseInt(cardId)),
-          eq(schema.priceSnapshots.condition, condition as typeof schema.cardConditionEnum.enumValues[number]),
-          gte(schema.priceSnapshots.snapshotDate, startDateStr)
-        )
-      )
-      .orderBy(desc(schema.priceSnapshots.snapshotDate));
+      .from(schema.tcgPrices)
+      .where(and(...filters))
+      .orderBy(asc(schema.tcgPrices.asOf));
 
     return apiSuccess({
-      card_id: cardId,
-      condition,
+      product_id: productId,
       days,
-      history: snapshots.map((s) => ({
-        date: s.snapshotDate,
-        market_price: s.marketPrice,
-        average_price: s.averagePrice,
-        median_price: s.medianPrice,
-        min_price: s.minPrice,
-        max_price: s.maxPrice,
-        sale_count: s.saleCount,
+      history: rows.map((r) => ({
+        date: r.asOf,
+        finish: r.subType,
+        market_price: r.marketPrice,
+        low_price: r.lowPrice,
+        mid_price: r.midPrice,
+        high_price: r.highPrice,
       })),
     });
   } catch (error) {

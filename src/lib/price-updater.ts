@@ -14,6 +14,16 @@ import { drizzle } from 'drizzle-orm/neon-http';
 import { eq, and, desc, sql, inArray } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { computePrice, markOutliers, type Sale as PricingSale } from './pricing-engine';
+import { canonicalGradingCompany } from './grade-parser';
+
+// --- Configuration ---
+
+/**
+ * Minimum non-outlier sales before we trust our own computed price over the
+ * scraped baseline. Below this, a single odd sale can swing the number badly,
+ * so the external reference is the safer thing to show.
+ */
+const MIN_SAMPLES_TO_TRUST = 3;
 
 // --- Types ---
 
@@ -67,10 +77,15 @@ export async function updatePricesForCards(
 
   const today = new Date().toISOString().split('T')[0];
 
-  // Get all distinct card+condition combos that have sales
+  // Get all distinct card+condition combos that have sales.
+  //
+  // Combos are keyed on the CANONICAL grading company, not the raw one: for
+  // every condition except the 10s, a grade is a grade regardless of grader,
+  // so all of a card's Grade 9 sales must feed one price. Keying on the raw
+  // company split each grade into up to five thinly-sampled rows and left the
+  // card page rendering whichever one came back first.
   for (const cardId of cardIds) {
-    // Get all distinct card combos that have sales
-    const combos = await db
+    const rawCombos = await db
       .selectDistinct({
         condition: schema.sales.condition,
         gradingCompany: schema.sales.gradingCompany,
@@ -78,9 +93,25 @@ export async function updatePricesForCards(
       .from(schema.sales)
       .where(eq(schema.sales.cardId, cardId));
 
+    const combos = [
+      ...new Map(
+        rawCombos.map((c) => {
+          const canonical = canonicalGradingCompany(c.condition, c.gradingCompany);
+          return [
+            `${c.condition}|${canonical}`,
+            { condition: c.condition, gradingCompany: canonical },
+          ] as const;
+        })
+      ).values(),
+    ];
+
     for (const { condition, gradingCompany } of combos) {
       try {
-        // Fetch recent sales for this card+condition
+        // Fetch recent sales for this card+condition. For company-agnostic
+        // grades we take every grader's sales; for the 10s we filter to the
+        // specific company, which the condition itself already identifies.
+        const isCompanySpecific = gradingCompany !== 'UNGRADED';
+
         const salesRows = await db
           .select({
             id: schema.sales.id,
@@ -93,7 +124,9 @@ export async function updatePricesForCards(
             and(
               eq(schema.sales.cardId, cardId),
               eq(schema.sales.condition, condition),
-              eq(schema.sales.gradingCompany, gradingCompany)
+              ...(isCompanySpecific
+                ? [eq(schema.sales.gradingCompany, gradingCompany)]
+                : [])
             )
           )
           .orderBy(desc(schema.sales.saleDate))
@@ -135,8 +168,16 @@ export async function updatePricesForCards(
 
         stats.pricesComputed++;
 
-        // Upsert current_prices
-        // Check if existing marketPrice exists in currentPrices (to preserve PriceCharting baseline)
+        // Upsert current_prices.
+        //
+        // The external (PriceCharting) figure lives in `baselinePrice` and is
+        // never written here — the scraper owns that column. `marketPrice` is
+        // OUR number whenever we have enough samples to stand behind it, and
+        // falls back to the baseline only when we don't.
+        //
+        // This used to read the existing marketPrice and write it straight back,
+        // which pinned every price to the scraped baseline forever and made the
+        // whole pricing engine a no-op.
         const existingCp = await db
           .select()
           .from(schema.currentPrices)
@@ -148,10 +189,19 @@ export async function updatePricesForCards(
             )
           );
 
-        const targetMarketPrice =
-          existingCp.length > 0 && existingCp[0].marketPrice
-            ? existingCp[0].marketPrice
-            : priceResult.marketPrice;
+        const baselinePrice = existingCp[0]?.baselinePrice ?? null;
+
+        const haveEnoughSamples = priceResult.saleCount >= MIN_SAMPLES_TO_TRUST;
+
+        const targetMarketPrice = haveEnoughSamples
+          ? priceResult.marketPrice
+          : baselinePrice ?? priceResult.marketPrice;
+
+        const priceSource = haveEnoughSamples
+          ? 'computed'
+          : baselinePrice
+            ? 'baseline'
+            : 'computed';
 
         await db
           .insert(schema.currentPrices)
@@ -161,6 +211,7 @@ export async function updatePricesForCards(
             gradingCompany: gradingCompany as any,
             marketPrice: targetMarketPrice,
             medianPrice: priceResult.medianPrice,
+            priceSource,
             saleCount: priceResult.saleCount,
             lastSaleDate: new Date(salesRows[0].saleDate),
             updatedAt: new Date(),
@@ -174,27 +225,51 @@ export async function updatePricesForCards(
             set: {
               marketPrice: targetMarketPrice,
               medianPrice: priceResult.medianPrice,
+              priceSource,
               saleCount: priceResult.saleCount,
               lastSaleDate: new Date(salesRows[0].saleDate),
               updatedAt: new Date(),
             },
           });
 
-        // Insert snapshots for distinct historical sale dates
-        const datesToSnapshot = new Set<string>();
-        datesToSnapshot.add(today);
-        for (const s of salesRows) {
-          const dStr = new Date(s.saleDate).toISOString().split('T')[0];
-          datesToSnapshot.add(dStr);
-        }
-
-        for (const snapDate of datesToSnapshot) {
-          await db
-            .insert(schema.priceSnapshots)
-            .values({
-              cardId,
-              condition,
-              gradingCompany,
+        // Write exactly ONE snapshot, for today.
+        //
+        // This used to also write today's computed price into a row for every
+        // historical date that had a sale — which manufactured a price history
+        // that never happened. Roughly half of all card+condition series ended
+        // up as a flat line at a single price, and /api/v1/price-history served
+        // that fabricated series to callers.
+        //
+        // A snapshot is a record of what the price was on the day it was taken,
+        // so it can only ever be written for today. Genuine history accumulates
+        // one honest row per day from here forward; the card detail page
+        // derives its chart from raw sales, which is real.
+        await db
+          .insert(schema.priceSnapshots)
+          .values({
+            cardId,
+            condition,
+            gradingCompany,
+            marketPrice: priceResult.marketPrice,
+            medianPrice: priceResult.medianPrice,
+            averagePrice: priceResult.averagePrice,
+            ewmaPrice: priceResult.ewmaPrice,
+            minPrice: priceResult.minPrice,
+            maxPrice: priceResult.maxPrice,
+            saleCount: priceResult.saleCount,
+            outlierCount: priceResult.outlierCount,
+            period: 'daily' as const,
+            snapshotDate: today,
+          })
+          .onConflictDoUpdate({
+            target: [
+              schema.priceSnapshots.cardId,
+              schema.priceSnapshots.condition,
+              schema.priceSnapshots.gradingCompany,
+              schema.priceSnapshots.snapshotDate,
+              schema.priceSnapshots.period,
+            ],
+            set: {
               marketPrice: priceResult.marketPrice,
               medianPrice: priceResult.medianPrice,
               averagePrice: priceResult.averagePrice,
@@ -203,30 +278,9 @@ export async function updatePricesForCards(
               maxPrice: priceResult.maxPrice,
               saleCount: priceResult.saleCount,
               outlierCount: priceResult.outlierCount,
-              period: 'daily' as const,
-              snapshotDate: snapDate,
-            })
-            .onConflictDoUpdate({
-              target: [
-                schema.priceSnapshots.cardId,
-                schema.priceSnapshots.condition,
-                schema.priceSnapshots.gradingCompany,
-                schema.priceSnapshots.snapshotDate,
-                schema.priceSnapshots.period,
-              ],
-              set: {
-                marketPrice: priceResult.marketPrice,
-                medianPrice: priceResult.medianPrice,
-                averagePrice: priceResult.averagePrice,
-                ewmaPrice: priceResult.ewmaPrice,
-                minPrice: priceResult.minPrice,
-                maxPrice: priceResult.maxPrice,
-                saleCount: priceResult.saleCount,
-                outlierCount: priceResult.outlierCount,
-              },
-            });
-          stats.snapshotsCreated++;
-        }
+            },
+          });
+        stats.snapshotsCreated++;
         stats.combosUpdated++;
       } catch (err: any) {
         console.error(

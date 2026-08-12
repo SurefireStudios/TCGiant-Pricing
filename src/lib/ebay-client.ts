@@ -111,14 +111,19 @@ async function getAccessToken(): Promise<string> {
 }
 
 /**
- * Search eBay for completed/sold listings.
+ * @deprecated MISNAMED — this returns ACTIVE listings, not sold ones.
  *
- * Uses the Browse API item_summary/search endpoint with filters
- * for sold items in the Trading Cards category.
+ * The Browse API's item_summary/search has no sold/completed filter; the
+ * `buyingOptions`, `conditionIds` and `sort` parameters below do not change
+ * that, and `sort: -endDate` is not even a valid Browse sort value. Items come
+ * back with `itemEndDate` set to a *future* end date, which this function then
+ * reports as `soldDate`.
  *
- * @param query - Search query string (e.g., '"Charizard" "Base Set" 4/102')
- * @param options - Search options
- * @returns Array of sold items
+ * Rows ingested from here averaged ~1.28x the true sold price for the same
+ * card+condition and have been deleted (`sales.source = 'ebay:browse-active'`).
+ *
+ * For genuine sold data use `lib/sources/ebay-insights.ts` (Marketplace
+ * Insights). Do not wire this into the pricing pipeline.
  */
 export async function searchSoldListings(
   query: string,
@@ -228,8 +233,8 @@ export async function searchSoldListings(
 }
 
 /**
- * Search specifically for completed/sold Pokémon cards.
- * Builds an optimized query and handles eBay category filtering.
+ * @deprecated MISNAMED — returns ACTIVE listings. See `searchSoldListings`.
+ * Use `lib/sources/ebay-insights.ts` for sold data.
  */
 export async function searchSoldPokemonCards(
   cardName: string,

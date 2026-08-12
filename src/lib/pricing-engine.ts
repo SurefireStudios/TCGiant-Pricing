@@ -36,8 +36,28 @@ export interface PriceSnapshot {
 /** EWMA smoothing factor. Higher = more weight on recent sales */
 const EWMA_ALPHA = 0.3;
 
-/** IQR multiplier for outlier detection. Higher = less aggressive filtering */
-const IQR_MULTIPLIER = 2.0;
+/**
+ * IQR multiplier for outlier detection. Higher = less aggressive filtering.
+ * 1.5 is the standard Tukey fence; 2.0 was letting through too much.
+ */
+const IQR_MULTIPLIER = 1.5;
+
+/**
+ * Absolute price floor, in cents.
+ *
+ * Sub-dollar "sales" on eBay are overwhelmingly bulk lots, damaged cards, and
+ * shipping-only listings rather than a real market price for the card. They
+ * arrive as a dense cluster, which is exactly the shape IQR is bad at removing
+ * — the cluster drags the quartiles down with it — so they need an absolute cut.
+ */
+const MIN_CREDIBLE_PRICE = 100; // $1.00
+
+/**
+ * Ceiling guard, in cents. Catches data-entry errors and misattributed sales
+ * (a sealed box sale attached to a single card). Only applied when we have
+ * enough samples for the median to be meaningful.
+ */
+const MAX_PRICE_MULTIPLE_OF_MEDIAN = 20;
 
 /** Minimum non-outlier sales required to compute a price */
 const MIN_SAMPLE_SIZE = 3;
@@ -76,23 +96,41 @@ const RECENT_SALES_COUNT = 5;
 export function detectOutliers(prices: number[]): Set<number> {
   const outliers = new Set<number>();
 
-  if (prices.length < 4) {
+  // Step 1: absolute floor. Applied first and unconditionally — these are not
+  // statistical outliers, they're non-prices, and they must be removed BEFORE
+  // the quartiles are computed or they drag Q1 down and widen the fence enough
+  // to keep themselves in.
+  const credibleIndices: number[] = [];
+  for (let i = 0; i < prices.length; i++) {
+    if (prices[i] < MIN_CREDIBLE_PRICE) {
+      outliers.add(i);
+    } else {
+      credibleIndices.push(i);
+    }
+  }
+
+  if (credibleIndices.length < 4) {
     // Not enough data for meaningful IQR
     return outliers;
   }
 
-  const sorted = [...prices].sort((a, b) => a - b);
+  const sorted = credibleIndices.map((i) => prices[i]).sort((a, b) => a - b);
   const q1Index = Math.floor(sorted.length * 0.25);
   const q3Index = Math.floor(sorted.length * 0.75);
   const q1 = sorted[q1Index];
   const q3 = sorted[q3Index];
   const iqr = q3 - q1;
+  const median = calculateMedian(sorted);
 
   const lowerBound = q1 - IQR_MULTIPLIER * iqr;
   const upperBound = q3 + IQR_MULTIPLIER * iqr;
 
-  for (let i = 0; i < prices.length; i++) {
-    if (prices[i] < lowerBound || prices[i] > upperBound) {
+  // Step 2: IQR fence, plus a hard ceiling for grossly misattributed sales
+  // (sealed product or a lot attached to a single card).
+  const ceiling = median * MAX_PRICE_MULTIPLE_OF_MEDIAN;
+
+  for (const i of credibleIndices) {
+    if (prices[i] < lowerBound || prices[i] > upperBound || prices[i] > ceiling) {
       outliers.add(i);
     }
   }
@@ -214,24 +252,27 @@ export function computePrice(sales: Sale[]): PriceSnapshot | null {
   const cleanPrices = cleanSales.map((s) => s.price);
 
   if (cleanPrices.length < MIN_SAMPLE_SIZE) {
-    // Not enough non-outlier data
-    // Still return what we have, but mark it
-    if (prices.length > 0) {
-      const median = calculateMedian(prices);
-      return {
-        marketPrice: median,
-        medianPrice: median,
-        averagePrice: Math.round(
-          prices.reduce((a, b) => a + b, 0) / prices.length
-        ),
-        ewmaPrice: median,
-        minPrice: Math.min(...prices),
-        maxPrice: Math.max(...prices),
-        saleCount: prices.length,
-        outlierCount: outlierIndices.size,
-      };
-    }
-    return null;
+    // Not enough non-outlier data to run the full blend. Fall back to a plain
+    // median — but only over sales that clear the credibility floor. Falling
+    // back to the raw `prices` array here would quietly reintroduce exactly the
+    // sub-dollar noise the outlier pass just removed.
+    const credible = prices.filter((p) => p >= MIN_CREDIBLE_PRICE);
+
+    if (credible.length === 0) return null;
+
+    const median = calculateMedian(credible);
+    return {
+      marketPrice: median,
+      medianPrice: median,
+      averagePrice: Math.round(
+        credible.reduce((a, b) => a + b, 0) / credible.length
+      ),
+      ewmaPrice: median,
+      minPrice: Math.min(...credible),
+      maxPrice: Math.max(...credible),
+      saleCount: credible.length,
+      outlierCount: outlierIndices.size,
+    };
   }
 
   // Step 3: Calculate component prices
@@ -269,7 +310,10 @@ export function computePrice(sales: Sale[]): PriceSnapshot | null {
     ewmaPrice,
     minPrice,
     maxPrice,
-    saleCount: recentSales.length,
+    // Count the sales the price is actually based on. Reporting the raw window
+    // size here overstated confidence — "based on 50 sales" when 30 of them
+    // were excluded as outliers.
+    saleCount: cleanPrices.length,
     outlierCount: outlierIndices.size,
   };
 }

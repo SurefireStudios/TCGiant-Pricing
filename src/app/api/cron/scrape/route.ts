@@ -19,15 +19,29 @@
 import { NextRequest } from 'next/server';
 import { runScraperBatch } from '@/lib/ebay-scraper';
 import { updatePricesForCards } from '@/lib/price-updater';
+import {
+  ebayInsightsSource,
+  getInsightsAvailability,
+} from '@/lib/sources/ebay-insights';
 
 export const maxDuration = 60; // Vercel function timeout (seconds)
 
 export async function GET(request: NextRequest) {
-  // Verify cron secret (Vercel automatically adds this header for cron jobs)
+  // Verify cron secret (Vercel automatically adds this header for cron jobs).
+  // Fail closed: an unset secret must not leave this endpoint publicly callable,
+  // since each run costs eBay API quota and writes to the database.
   const authHeader = request.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;
 
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  if (!cronSecret) {
+    console.error('[CRON] CRON_SECRET is not set — refusing to run.');
+    return Response.json(
+      { error: 'Cron endpoint is not configured' },
+      { status: 503 }
+    );
+  }
+
+  if (authHeader !== `Bearer ${cronSecret}`) {
     return Response.json(
       { error: 'Unauthorized' },
       { status: 401 }
@@ -39,6 +53,21 @@ export async function GET(request: NextRequest) {
     return Response.json({
       status: 'skipped',
       message: 'eBay credentials not configured. Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET.',
+    });
+  }
+
+  // Credentials alone are not enough. Sold data requires the Marketplace
+  // Insights limited-release scope; without it the only eBay endpoint we could
+  // call returns ACTIVE listings, and ingesting those as sales is what
+  // contaminated the table before. Skip rather than write asking prices.
+  if (!(await ebayInsightsSource.isAvailable())) {
+    return Response.json({
+      status: 'skipped',
+      message:
+        'eBay Marketplace Insights access has not been granted for this keyset, ' +
+        'so no sold data is available. Pricing continues from PriceCharting. ' +
+        'Run `npx tsx src/scripts/check-ebay-access.ts` for details.',
+      detail: getInsightsAvailability().reason,
     });
   }
 
